@@ -105,7 +105,7 @@
     rowMenu = null;
     addTrigger = e.currentTarget as HTMLElement;
     const r = addTrigger.getBoundingClientRect();
-    addMenu = { x: Math.min(r.left, window.innerWidth - 180), y: r.bottom + 4 };
+    addMenu = { x: Math.max(4, Math.min(r.left, window.innerWidth - 228)), y: Math.max(4, Math.min(r.bottom + 4, window.innerHeight - 156)) };
   }
 
   function openBackgroundMenu(e: MouseEvent) {
@@ -115,8 +115,8 @@
     rowMenu = null;
     addTrigger = searchInput ?? (e.currentTarget as HTMLElement);
     addMenu = {
-      x: Math.max(4, Math.min(e.clientX, window.innerWidth - 180)),
-      y: Math.max(4, Math.min(e.clientY, window.innerHeight - 120)),
+      x: Math.max(4, Math.min(e.clientX, window.innerWidth - 228)),
+      y: Math.max(4, Math.min(e.clientY, window.innerHeight - 156)),
     };
   }
 
@@ -141,22 +141,67 @@
   });
 
   // --- group add / rename, stack add ------------------------------------------
-  type StackFolder = { path: string; apps: StackFolderAppDTO[]; include: boolean[] };
+  type PickedFolder = { path: string; apps: StackFolderAppDTO[]; include: boolean[] };
   let dialog = $state<{
-    mode: "add" | "rename" | "stack";
+    mode: "add" | "rename" | "stack" | "projects";
     name: string;
     value: string;
-    /** stack mode: the picked parent folder and which of its apps to include. */
-    folder?: StackFolder;
+    folder?: PickedFolder;
+    picking?: boolean;
+    saving?: boolean;
+    error?: string;
     /** stack mode: the name the folder suggested, replaced on a re-pick unless edited. */
     suggested?: string;
   } | null>(null);
 
+  function openProjectsFolder(group = "") {
+    closeAddMenu();
+    dialog = { mode: "projects", name: group, value: "" };
+    void pickFolder();
+  }
+
+  const selectedApps = $derived(dialog?.folder?.apps.filter((a, i) => dialog?.folder?.include[i] && !a.blocked) ?? []);
+  const eligibleCount = $derived(dialog?.folder?.apps.filter(app => !app.blocked).length ?? 0);
+
+  function selectFolderApps(all: boolean) {
+    const folder = dialog?.folder;
+    if (folder) folder.include = folder.apps.map(app => all && !app.blocked);
+  }
+  const dialogTitle = $derived.by(() => {
+    switch (dialog?.mode) {
+      case "add": return "New group";
+      case "rename": return "Rename group";
+      case "stack": return "New stack";
+      case "projects": {
+        const group = store.groups.find(g => g.name === dialog?.name);
+        return group ? `Add projects to ${group.label || group.name}` : "Add projects from folder";
+      }
+      default: return "";
+    }
+  });
+
   async function submitDialog() {
     const d = dialog;
-    if (!d) return;
+    if (!d || d.picking || d.saving) return;
+    if (d.mode === "projects") {
+      if (!selectedApps.length) return;
+      d.saving = true;
+      d.error = "";
+      try {
+        const added = await ConfigService.AddProjectsFromFolder(d.name, selectedApps.map(app => app.path));
+        store.setFlash(added ? `Added ${added} project${added === 1 ? "" : "s"}` : "Projects already added", "good");
+        void store.refresh();
+        dialog = null;
+      } catch (err) {
+        d.error = String(err);
+      } finally {
+        d.saving = false;
+      }
+      return;
+    }
     const value = d.value.trim();
     if (!value) return;
+    const apps = selectedApps;
     dialog = null;
     if (d.mode === "add") await store.addGroup(value);
     else if (d.mode === "rename") await store.renameGroup(d.name, value);
@@ -164,7 +209,6 @@
       // A stack from a parent folder brings its members along; otherwise it is
       // empty. Either way it has no Linear filter yet, so its form is the next
       // thing anyone needs.
-      const apps = d.folder ? d.folder.apps.filter((a, i) => d.folder!.include[i] && !a.blocked) : [];
       const name = apps.length > 0 ? await store.createStackFromFolder(value, apps) : await store.createStack(value);
       if (name) nav.openOverlay("project", name);
     }
@@ -176,31 +220,32 @@
   // with a checkbox. Every app is included by default except one the backend
   // says cannot join (a member of another stack). The name is suggested from
   // the folder only while the human has not typed one.
-  let picking = $state(false);
-
-  async function pickStackFolder() {
+  async function pickFolder() {
     const d = dialog;
-    if (!d || d.mode !== "stack" || picking) return;
-    picking = true;
+    if (!d || d.picking || d.saving) return;
+    d.picking = true;
+    d.error = "";
     try {
       const chosen = await ConfigService.PickFolder(d.folder?.path ?? "");
-      if (!chosen || dialog !== d) return;
-      const scan = await ConfigService.ScanStackFolder(chosen);
+      if (dialog !== d) return;
+      if (!chosen) {
+        if (d.mode === "projects" && !d.folder) dialog = null;
+        return;
+      }
+      const scan = d.mode === "projects" ? await ConfigService.ScanProjectFolder(chosen) : await ConfigService.ScanStackFolder(chosen);
       if (dialog !== d) return;
       const apps = scan.apps ?? [];
       d.folder = { path: scan.path, apps, include: apps.map((a) => !a.blocked) };
-      if (!d.value.trim() || d.value === d.suggested) d.value = scan.suggestedLabel;
-      d.suggested = scan.suggestedLabel;
+      if (d.mode === "stack") {
+        if (!d.value.trim() || d.value === d.suggested) d.value = scan.suggestedLabel;
+        d.suggested = scan.suggestedLabel;
+      }
     } catch (err) {
-      store.setFlash(String(err), "bad");
+      d.error = String(err);
     } finally {
-      picking = false;
+      d.picking = false;
     }
   }
-
-  const folderCount = $derived(
-    dialog?.folder ? dialog.folder.apps.filter((a, i) => dialog!.folder!.include[i] && !a.blocked).length : 0,
-  );
 
   // --- stack membership --------------------------------------------------------
 
@@ -754,6 +799,7 @@
                 dropTarget={target?.kind === "into" && target.group === g.name}
                 ontoggle={() => toggleGroup(g.name, collapsed)}
                 onaddproject={() => nav.newProjectInGroup(g.name)}
+                onaddprojects={() => openProjectsFolder(g.name)}
                 onkeydown={(e) => nudgeGroup(e, g.name, i)}
                 onrename={() => (dialog = { mode: "rename", name: g.name, value: g.label || g.name })}
                 onremove={() => askRemoveGroup(g.name, g.label || g.name)}
@@ -800,7 +846,7 @@
        surface underneath. Same shape as the session context menu. -->
   <div class="fixed inset-0 z-40" role="presentation" onclick={() => closeAddMenu()}></div>
   <div
-    class="fixed z-50 min-w-[11rem] rounded-lg border border-edge bg-panel p-1 shadow-xl"
+    class="fixed z-50 w-56 max-w-[calc(100vw-8px)] rounded-lg border border-edge bg-panel p-1 shadow-xl"
     style="left:{addMenu.x}px;top:{addMenu.y}px"
     role="menu"
   >
@@ -811,6 +857,7 @@
         nav.openOverlay("project", "");
       }}>New project</MenuItem
     >
+    <MenuItem icon="+" onclick={() => openProjectsFolder()}>Add projects from folder…</MenuItem>
     <MenuItem
       icon="▸"
       onclick={() => {
@@ -930,69 +977,80 @@
 
 {#if dialog}
   <Modal
-    title={dialog.mode === "add" ? "New group" : dialog.mode === "stack" ? "New stack" : "Rename group"}
-    width="420px"
-    onClose={() => (dialog = null)}
+    title={dialogTitle}
+    width={dialog.mode === "projects" || dialog.folder ? "800px" : "420px"}
+    onClose={() => { if (!dialog?.saving) dialog = null; }}
+    onkey={(e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!dialog?.saving) dialog = null;
+      }
+    }}
   >
-    <label class="block">
-      <span class="label mb-1 block text-faint">Name</span>
-      <input
-        class="w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder"
-        placeholder={dialog.mode === "stack" ? "Nori" : "Clients"}
-        bind:value={dialog.value}
-        onkeydown={(e) => {
-          // Escape is handled here rather than by App.svelte's global handler:
-          // this is not a nav overlay, and that handler bails while a field has
-          // focus (see its typing() guard).
-          if (e.key === "Escape") dialog = null;
-          if (e.key === "Enter") void submitDialog();
-        }}
-      />
-    </label>
-    {#if dialog.mode === "stack"}
-      <div class="mt-3">
+    {#if dialog.mode !== "projects"}
+      <label class="block">
+        <span class="label mb-1 block text-faint">Name</span>
+        <input
+          class="w-full rounded border border-edge bg-canvas px-2 py-1.5 text-ink outline-none focus:border-accent placeholder:text-placeholder"
+          placeholder={dialog.mode === "stack" ? "Nori" : "Clients"}
+          bind:value={dialog.value}
+          onkeydown={(e) => { if (e.key === "Enter") void submitDialog(); }}
+        />
+      </label>
+    {/if}
+    {#if dialog.mode === "stack" || dialog.mode === "projects"}
+      <div class:mt-3={dialog.mode === "stack"}>
         <div class="flex items-center justify-between gap-2">
           <span class="label text-faint">Parent folder</span>
-          <Button size="sm" variant="secondary" loading={picking} onclick={() => void pickStackFolder()}>
+          <Button size="sm" variant="secondary" loading={dialog.picking} disabled={dialog.saving} onclick={() => void pickFolder()}>
             {dialog.folder ? "Change…" : "Choose parent folder…"}
           </Button>
         </div>
         {#if !dialog.folder}
           <p class="mt-1 text-sm text-faint">
-            Optional. Pick the folder that holds the stack's repositories to add them as apps automatically.
+            {dialog.mode === "stack" ? "Optional. Pick the folder that holds the stack's repositories to add them as apps automatically." : "Choose the folder that contains your Git repositories."}
           </p>
         {:else}
           <p class="mt-1 truncate font-mono text-sm text-faint" title={dialog.folder.path}>{dialog.folder.path}</p>
           {#if dialog.folder.apps.length === 0}
-            <p class="mt-2 text-sm text-warn">No git checkouts directly inside this folder. The stack is created empty.</p>
+            <p class="mt-2 text-sm text-warn">No git checkouts directly inside this folder.{dialog.mode === "stack" ? " The stack is created empty." : ""}</p>
           {:else}
-            <ul class="mt-2 max-h-56 overflow-auto rounded border border-edge" aria-label="Apps in folder">
+            <div class="mt-3 mb-1 flex items-center justify-between gap-3">
+              <p class="text-sm text-faint">{selectedApps.length} of {dialog.folder.apps.length} included</p>
+              <div role="group" aria-label="Repository selection" class="flex items-center gap-1">
+                <Button size="xs" aria-label="Select all repositories" disabled={dialog.picking || dialog.saving || selectedApps.length === eligibleCount} onclick={() => selectFolderApps(true)}>All</Button>
+                <span aria-hidden="true" class="h-3 w-px bg-edge"></span>
+                <Button size="xs" aria-label="Deselect all repositories" disabled={dialog.picking || dialog.saving || !selectedApps.length} onclick={() => selectFolderApps(false)}>None</Button>
+              </div>
+            </div>
+            <ul class="@container max-h-[min(52dvh,36rem,max(8rem,calc(84dvh-16rem)))] overflow-y-auto overscroll-contain rounded border border-edge" aria-label={dialog.mode === "projects" ? "Projects in folder" : "Apps in folder"}>
               {#each dialog.folder.apps as app, i (app.path)}
                 <li class="border-b border-edge last:border-b-0">
-                  <label class="flex items-center gap-2 px-2 py-1.5 {app.blocked ? '' : 'cursor-pointer'}" title={app.path}>
+                  <label class="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 px-3 py-2 @lg:grid-cols-[auto_minmax(0,1fr)_minmax(0,1.1fr)] {app.blocked ? '' : 'cursor-pointer hover:bg-sel/40'}" title={app.path}>
                     <Checkbox
                       bind:checked={dialog.folder.include[i]}
-                      disabled={!!app.blocked}
+                      disabled={!!app.blocked || dialog.saving || dialog.picking}
                       aria-label="Include {app.label}"
                     />
-                    <span class="min-w-0 flex-1 truncate text-ink {app.blocked ? 'opacity-55' : ''}">{app.label}</span>
-                    <span class="shrink-0 truncate text-sm text-faint">
+                    <span class="wrap-anywhere text-ink {app.blocked ? 'opacity-55' : ''}">{app.label}</span>
+                    <span class="col-start-2 wrap-anywhere text-sm text-faint @lg:col-start-3">
                       {#if app.blocked}{app.blocked}{:else if app.project}joins existing project{:else}{app.repo || "no GitHub remote"}{/if}
                     </span>
                   </label>
                 </li>
               {/each}
             </ul>
-            <p class="mt-1 text-sm text-faint">{folderCount} of {dialog.folder.apps.length} included</p>
           {/if}
         {/if}
       </div>
     {/if}
+    {#if dialog.error}<p role="alert" class="mt-2 text-sm text-bad">{dialog.error}</p>{/if}
     {#snippet footer()}
       <div class="flex justify-end gap-2">
-        <Button onclick={() => (dialog = null)}>Cancel</Button>
-        <Button variant="primary" disabled={!dialog?.value.trim()} onclick={() => void submitDialog()}>
-          {dialog?.mode === "rename" ? "Rename" : "Create"}
+        <Button disabled={dialog?.saving} onclick={() => (dialog = null)}>Cancel</Button>
+        <Button variant="primary" loading={dialog?.saving} disabled={dialog?.picking || (dialog?.mode === "projects" ? !selectedApps.length : !dialog?.value.trim())} onclick={() => void submitDialog()}>
+          {dialog?.mode === "projects" ? `Add ${selectedApps.length} project${selectedApps.length === 1 ? "" : "s"}` : dialog?.mode === "rename" ? "Rename" : "Create"}
         </Button>
       </div>
     {/snippet}

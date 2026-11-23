@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 )
 
@@ -22,19 +21,26 @@ const MaxScanChildren = 64
 // Results are sorted by directory name. Like Inspect it never errors: an
 // unreadable dir is simply no apps.
 func (i Inspector) Scan(ctx context.Context, dir string) []Info {
+	infos, _ := i.scan(ctx, dir, MaxScanChildren)
+	return infos
+}
+
+// ScanAll lists every immediate checkout for bulk import. A read failure or
+// timeout is reported so the picker never presents a partial list as complete.
+func ScanAll(ctx context.Context, dir string) ([]Info, error) {
+	return Inspector{}.scan(ctx, dir, 0)
+}
+
+func (i Inspector) scan(ctx context.Context, dir string, limit int) ([]Info, error) {
 	dir = strings.TrimSpace(dir)
-	if dir == "" {
-		return nil
-	}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	sort.Slice(entries, func(a, b int) bool { return entries[a].Name() < entries[b].Name() })
 	var out []Info
 	checked := 0
 	for _, e := range entries {
-		if checked >= MaxScanChildren || ctx.Err() != nil {
+		if (limit > 0 && checked >= limit) || ctx.Err() != nil {
 			break
 		}
 		if strings.HasPrefix(e.Name(), ".") {
@@ -54,7 +60,7 @@ func (i Inspector) Scan(ctx context.Context, dir string) []Info {
 		// project instead of being added a second time under another path.
 		out = append(out, info)
 	}
-	return out
+	return out, ctx.Err()
 }
 
 // Scan is the package-level convenience for the default inspector.

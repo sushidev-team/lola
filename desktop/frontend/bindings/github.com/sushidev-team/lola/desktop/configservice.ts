@@ -44,6 +44,14 @@ export function AddGroup(label: string): $CancellablePromise<string> {
 }
 
 /**
+ * AddProjectsFromFolder adds selected checkout roots in one config write.
+ * A repeated import skips configured paths and preserves their group and settings.
+ */
+export function AddProjectsFromFolder(group: string, paths: string[] | null): $CancellablePromise<number> {
+    return $Call.ByID(2422798416, group, paths);
+}
+
+/**
  * AddStackMembersFromFolder adds selected scan results atomically, rechecking
  * memberships against the current config so a stale scan cannot move a member
  * out of another stack. Existing projects keep their settings.
@@ -424,6 +432,13 @@ export function SaveSettings(dto: $models.SettingsDTO): $CancellablePromise<void
  */
 export function SaveTeamLimits(d: $models.TeamLimitsDTO): $CancellablePromise<void> {
     return $Call.ByID(2860107651, d);
+}
+
+/**
+ * ScanProjectFolder lists sibling checkouts and marks those already configured.
+ */
+export function ScanProjectFolder(parent: string): $CancellablePromise<$models.StackFolderDTO> {
+    return $Call.ByID(4095624791, parent);
 }
 
 /**

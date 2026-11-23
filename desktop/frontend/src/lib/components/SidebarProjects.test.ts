@@ -5,7 +5,7 @@ import { tick } from "svelte";
 // The bindings are the process boundary. Stubbing them keeps this about what
 // the sidebar OFFERS and what it asks the backend to persist — the arrangement
 // maths itself is pinned in sidebarlayout.test.ts, without a DOM.
-const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack, PickFolder, ScanStackFolder, CreateStackFromFolder, RemoveProject, RemoveStack, DoctorRun } = vi.hoisted(() => ({
+const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout, CreateStack, SetProjectStack, PickFolder, ScanStackFolder, CreateStackFromFolder, ScanProjectFolder, AddProjectsFromFolder, RemoveProject, RemoveStack, DoctorRun } = vi.hoisted(() => ({
   // The setup checklist's one doctor run: gh signed out, so one item is left.
   DoctorRun: vi.fn().mockResolvedValue({
     results: [
@@ -19,6 +19,8 @@ const { AddGroup, RemoveGroup, RenameGroup, SetGroupCollapsed, SetProjectLayout,
   CreateStack: vi.fn(),
   PickFolder: vi.fn(),
   ScanStackFolder: vi.fn(),
+  ScanProjectFolder: vi.fn(),
+  AddProjectsFromFolder: vi.fn(),
   CreateStackFromFolder: vi.fn(),
   SetProjectStack: vi.fn(),
   RemoveProject: vi.fn(),
@@ -47,6 +49,8 @@ vi.mock("@bindings/desktop", () => ({
     CreateStack: (...a: unknown[]) => CreateStack(...a),
     PickFolder: (...a: unknown[]) => PickFolder(...a),
     ScanStackFolder: (...a: unknown[]) => ScanStackFolder(...a),
+    ScanProjectFolder,
+    AddProjectsFromFolder,
     CreateStackFromFolder: (...a: unknown[]) => CreateStackFromFolder(...a),
     SetProjectStack: (...a: unknown[]) => SetProjectStack(...a),
     RemoveProject: (...a: unknown[]) => RemoveProject(...a),
@@ -232,7 +236,7 @@ describe("SidebarProjects", () => {
     expect(await fireEvent.contextMenu(header)).toBe(false);
     expect(SetGroupCollapsed).not.toHaveBeenCalled();
     const menu = screen.getByRole("menu", { name: "Clients actions" });
-    expect(within(menu).getAllByRole("menuitem")).toHaveLength(2);
+    expect(within(menu).getAllByRole("menuitem")).toHaveLength(3);
     await fireEvent.click(within(menu).getByRole("menuitem", { name: "Add project" }));
     expect(nav.overlay).toBe("project");
     expect(nav.overlayProject).toBe("");
@@ -247,6 +251,8 @@ describe("SidebarProjects", () => {
     const header = screen.getByRole("button", { name: "Clients 1" });
     await fireEvent.keyDown(header, { key: "F10", shiftKey: true });
     expect(screen.getByRole("menuitem", { name: "Add project" })).toHaveFocus();
+    await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
+    expect(screen.getByRole("menuitem", { name: "Add projects from folder…" })).toHaveFocus();
     await fireEvent.keyDown(document.activeElement!, { key: "ArrowDown" });
     expect(screen.getByRole("menuitem", { name: "Remove group…" })).toHaveFocus();
     await fireEvent.keyDown(document.activeElement!, { key: "Escape" });
@@ -601,6 +607,43 @@ describe("SidebarProjects", () => {
     expect(nav.overlay).toBe("project");
   });
 
+  it.each(["", "clients"])("adds only selected new repositories to destination %j", async group => {
+    PickFolder.mockResolvedValue("/src");
+    ScanProjectFolder.mockResolvedValue({ path: "/src", apps: [
+      { path: "/src/api", label: "API" }, { path: "/src/web", label: "Web" },
+      { path: "/src/lola", label: "Lola", blocked: "Already added" },
+    ] });
+    AddProjectsFromFolder.mockResolvedValue(1);
+    render(SidebarProjects);
+    if (group) await fireEvent.contextMenu(screen.getByRole("button", { name: "Clients 1" }));
+    else await fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await fireEvent.click(screen.getByRole("menuitem", { name: "Add projects from folder…" }));
+    const dialog = within(screen.getByRole("dialog", { name: group ? "Add projects to Clients" : "Add projects from folder" }));
+    const api = await dialog.findByRole("checkbox", { name: "Include API" });
+    const web = dialog.getByRole("checkbox", { name: "Include Web" });
+    expect(api).toBeChecked();
+    expect(web).toBeChecked();
+    const existing = dialog.getByRole("checkbox", { name: "Include Lola" });
+    expect(existing).toBeDisabled();
+    const all = dialog.getByRole("button", { name: "Select all repositories" });
+    const none = dialog.getByRole("button", { name: "Deselect all repositories" });
+    expect(all).toBeDisabled();
+    await fireEvent.click(none);
+    expect(none).toBeDisabled();
+    expect(web).not.toBeChecked();
+    expect(api).not.toBeChecked();
+    expect(dialog.getByRole("button", { name: "Add 0 projects" })).toBeDisabled();
+    await fireEvent.click(all);
+    expect(all).toBeDisabled();
+    expect(api).toBeChecked();
+    expect(web).toBeChecked();
+    expect(existing).not.toBeChecked();
+    await fireEvent.click(web);
+    await fireEvent.click(dialog.getByRole("button", { name: "Add 1 project" }));
+    expect(AddProjectsFromFolder).toHaveBeenCalledWith(group, ["/src/api"]);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
   it("nests a stack's members under it, whatever their folder", () => {
     store.projects = stackProjects();
     const { container } = render(SidebarProjects);
@@ -707,7 +750,7 @@ describe("SidebarProjects", () => {
     // Only projects outside every stack are offered.
     expect(screen.queryByRole("menuitem", { name: "web" })).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("menuitem", { name: "lola" }));
-    expect(confirm.request?.body).toBe("Add lola to stack nori?");
+    expect(confirm.request).toMatchObject({ title: "Add to stack?", subject: "lola → nori" });
     confirm.accept();
     expect(SetProjectStack).toHaveBeenCalledWith("lola", "nori");
   });

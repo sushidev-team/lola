@@ -879,21 +879,10 @@ func (s *ConfigService) GetProject(name string) (ProjectFormDTO, error) {
 		// Enabled stays false here: a project without a team polls nothing,
 		// so the form turns Enabled on itself once a team is chosen for a NEW
 		// project (unless the human already set the box), never before.
-		blank := config.Project{
-			DefaultBranch: config.DefaultBranchName,
-			CycleMode:     "none",
-			AssigneeMode:  "anyone",
-			Inherits: config.ProjectInherits{
-				Symlinks: true, PostCreate: true, Env: true,
-				MatchLabels: true, MatchMode: true, OnSentSetLabel: true,
-				BlockedLabelID: true, DedupMode: true, PrioritySort: true, AutoPRComments: true,
-				RequirePlan: true,
-			},
-		}
 		// Resolve against a scratch config so the new project's ghosts show the
 		// [defaults] values the real project will inherit once saved.
 		scratch := *cfg
-		scratch.Projects = []config.Project{blank}
+		scratch.Projects = []config.Project{newProjectDefaults()}
 		scratch.ResolveInheritance()
 		dto := projectDTO(&scratch.Projects[0])
 		dto.IsNew = true
@@ -1257,12 +1246,7 @@ func scanStackFolder(ctx context.Context, cfg *config.Config, path string) Stack
 		return out
 	}
 	for _, info := range gitrepo.Scan(ctx, path) {
-		app := StackFolderAppDTO{
-			Path:          info.Root,
-			Label:         config.LabelFromPath(info.Root),
-			Repo:          info.Repo,
-			DefaultBranch: info.DefaultBranch,
-		}
+		app := folderApp(info)
 		if cfg != nil {
 			if p := cfg.ProjectAtPath(canonicalPath(info.Root), canonicalPath); p != nil {
 				app.Project, app.Label = p.Name, p.DisplayName()

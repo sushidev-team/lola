@@ -20,6 +20,7 @@
     dropTarget = false,
     ontoggle,
     onaddproject,
+    onaddprojects,
     onkeydown,
     onrename,
     onremove,
@@ -34,6 +35,7 @@
     dropTarget?: boolean;
     ontoggle: () => void;
     onaddproject: () => void;
+    onaddprojects: () => void;
     /** alt+arrow reorder, handled on the header's own control. */
     onkeydown?: (e: KeyboardEvent) => void;
     onrename: () => void;
@@ -149,10 +151,11 @@
 {#if menuAt}
   <div class="fixed inset-0 z-40" role="presentation" onclick={closeMenu}
     oncontextmenu={(e) => { e.preventDefault(); closeMenu(); }}></div>
-  <div class="fixed z-50 w-48 max-w-[calc(100vw-8px)] max-h-[calc(100vh-8px)] overflow-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
+  <div class="fixed z-50 w-56 max-w-[calc(100vw-8px)] max-h-[calc(100vh-8px)] overflow-auto rounded-lg border border-edge bg-panel p-1 shadow-xl"
     role="menu" aria-label="{label} actions" tabindex="-1" use:placeMenu={menuAt} onkeydown={menuKey}
     oncontextmenu={(e) => e.preventDefault()}>
     <MenuItem icon="+" onclick={() => choose(onaddproject)}>Add project</MenuItem>
+    <MenuItem icon="+" onclick={() => choose(onaddprojects)}>Add projects from folder…</MenuItem>
     <div class="my-1 border-t border-edge"></div>
     <MenuItem variant="danger" onclick={() => choose(onremove)}>Remove group…</MenuItem>
   </div>
