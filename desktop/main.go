@@ -411,6 +411,7 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 		return func(*application.Context) { app.Event.Emit(evtSessionAction, action) }
 	}
 	menu.Add("Switch to Git or Back").SetAccelerator("CmdOrCtrl+Shift+g").OnClick(ask("toggle-git"))
+	menu.Add("Switch to Preview or Back").SetAccelerator("CmdOrCtrl+Shift+p").OnClick(ask("toggle-preview"))
 	menu.Add("Show or Hide Sidebar").SetAccelerator("CmdOrCtrl+b").OnClick(ask("toggle-sidebar"))
 	menu.Add("Show or Hide Right Sidebar").SetAccelerator("CmdOrCtrl+n").OnClick(ask("toggle-right-sidebar"))
 	menu.Add("Focus Sessions").SetAccelerator("CmdOrCtrl+Shift+e").OnClick(ask("focus-sessions"))

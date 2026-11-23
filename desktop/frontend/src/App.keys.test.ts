@@ -313,6 +313,30 @@ describe("in a session", () => {
       preview.close();
     }
   });
+  it("toggles the session preview and returns to the same live tab", async () => {
+    const url = "http://localhost:5173";
+    await mount([plain(A, { devActive: true, apps: [{ name: "web", devUrls: [url] }] }), plain(B)]);
+    nav.openSession(A);
+    try {
+      chord("toggle-preview");
+      expect(preview.request).toMatchObject({ sessionId: A, url });
+      chord("preview-duplicate");
+      const tab = preview.tabs[preview.active].id;
+      chord("toggle-preview");
+      expect(screen.queryByRole("dialog", { name: "Preview" })).toBeNull();
+      expect(nav.focusedTerm).toBe(A);
+      chord("toggle-preview");
+      expect(screen.getByRole("dialog", { name: "Preview" })).toBeInTheDocument();
+      expect(preview.tabs).toHaveLength(2);
+      expect(preview.tabs[preview.active].id).toBe(tab);
+      chord("toggle-preview");
+      nav.openSession(B);
+      chord("toggle-preview");
+      expect(preview.visible).toBe(false);
+    } finally {
+      preview.close();
+    }
+  });
   it("routes native menu chords to the visible Preview, including the last tab", async () => {
     const root = "http://localhost:5173";
     await mount([plain(A, { devUrls: [root] })]);

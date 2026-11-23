@@ -49,6 +49,7 @@
   import BestOfOverlay from "$lib/views/BestOfOverlay.svelte";
   import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import { preview } from "$lib/preview.svelte";
+  import { devUrlGroups } from "$lib/devurl";
   import PreviewWorkspace from "$lib/components/session/PreviewWorkspace.svelte";
   import BulkPickupDialog from "$lib/components/BulkPickupDialog.svelte";
   import SandboxLoginDialog from "$lib/components/SandboxLoginDialog.svelte";
@@ -152,6 +153,16 @@
       return;
     }
     switch (action) {
+      case "toggle-preview": {
+        if (preview.sessionId === s.id) {
+          preview.visible = true;
+          break;
+        }
+        const url = s.devActive && devUrlGroups(s.devUrls ?? [], s.apps ?? []).find(group => group.urls.length)?.urls[0];
+        if (url) preview.open(s.id, url);
+        else store.setFlash("This session has no running dev server address to preview.", "warn");
+        break;
+      }
       case "review":
         store.review(s.id); // the CONFIGURED provider, not coderabbit specifically
         break;

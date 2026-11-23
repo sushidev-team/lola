@@ -27,6 +27,7 @@
       ["⌘⇧R", "Run configured review"],
     ] },
     { title: "Preview", keys: [
+      ["⌘⇧P", "Open preview / return to previous view"],
       ["⌘W", "Close the tab, or Preview on the last tab"],
       ["⌘D", "Duplicate the current page and viewport"],
       ["⌘T", "Open a fresh tab on the current server"],

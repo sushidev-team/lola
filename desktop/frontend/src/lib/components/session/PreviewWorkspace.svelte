@@ -79,8 +79,12 @@
     if (preview.tabs[next].visited) preview.select(next);
     focusTab(next);
   }
+  function hidePreview() {
+    preview.visible = false;
+  }
   export function menuAction(action: string) {
     if (!current) return;
+    if (action === "toggle-preview") { hidePreview(); return; }
     switch (action) {
       case "close-tab": void closeTab(preview.active); break;
       case "preview-duplicate": {
@@ -143,7 +147,7 @@
       </nav>
     </div>
   {/snippet}
-  <Modal title="Preview" headerContent={header} visible={preview.visible} onClose={() => preview.visible = false} onkey={onModalKey} fullscreen bodyClass="min-w-0 overflow-hidden">
+  <Modal title="Preview" headerContent={header} visible={preview.visible} onClose={hidePreview} onkey={onModalKey} fullscreen bodyClass="min-w-0 overflow-hidden">
       <div class="relative flex h-full min-h-0 overflow-hidden">
         {#if compact}
           <button type="button" tabindex="-1" aria-label="Dismiss page sidebar" inert={!expanded} aria-hidden={!expanded}
