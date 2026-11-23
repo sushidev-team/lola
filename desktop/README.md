@@ -260,8 +260,9 @@ Reopening a stopped agent in a shared checkout starts a new conversation,
 avoiding accidental resumption of another session in the same directory.
 
 Main-checkout sessions do not run worktree setup/cleanup hooks, automatic PR
-reactions, checkpoint restoration, or automatic agent switching. Run dev
-commands in their shell tabs. Sandboxed agents still require isolated worktrees.
+reactions, checkpoint restoration, or automatic agent switching. In a main
+or existing project checkout, **Overview → Start dev** runs the project's
+configured dev commands there. Sandboxed agents still require isolated worktrees.
 Activity is collapsed by default; expand it for a bounded feed, or choose
 **View all activity** for the larger view.
 

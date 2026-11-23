@@ -5,9 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -101,6 +103,58 @@ func TestLocalReviveStartsShellWithoutAgentOrCheckoutWrites(t *testing.T) {
 	}
 	if log := loggedArgs(t, f.tmuxLog); strings.Contains(log, "--settings") {
 		t.Fatalf("shell revived as agent: %s", log)
+	}
+}
+
+func TestLocalCheckoutLeasesPortForAgentAndShell(t *testing.T) {
+	f := newFixture(t, "", "*\"has-session\"*) exit 1 ;;")
+	f.n.Ports = leaseRegistry(t)
+	f.p.PortRange = config.PortRangeAuto
+	f.p.Env = map[string]string{
+		"PORT":                "{{.Port}}",
+		"NEXTAUTH_URL":        "http://localhost:{{.Port}}",
+		"NEXT_PUBLIC_APP_URL": "http://localhost:{{.Port}}",
+	}
+	s, err := f.n.OpenDirectory(t.Context(), f.p, "lola-local-ports", f.repo, "checkout", "claude", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, ok := f.n.Ports.Get(s.ID)
+	if !ok || lease.Port() < config.AutoPortLo || lease.Port() > config.AutoPortHi {
+		t.Fatalf("expected an automatic port lease, got %+v", lease)
+	}
+	port := strconv.Itoa(lease.Port())
+	art, _ := localArtifacts(s.ID)
+	for _, name := range []string{"env", "shell-env"} {
+		cmd := exec.Command("sh", "-c", `. "$1" && printf '%s\n' "$PORT" "$NEXTAUTH_URL" "$NEXT_PUBLIC_APP_URL" "$LOLA_PORT"`, "sh", filepath.Join(art, name))
+		want := port + "\nhttp://localhost:" + port + "\nhttp://localhost:" + port + "\n" + port + "\n"
+		if got, err := cmd.CombinedOutput(); err != nil || string(got) != want {
+			t.Errorf("%s: got %q, %v; want %q", name, got, err, want)
+		}
+	}
+	if err := f.n.Kill(t.Context(), s, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if kept, ok := f.n.Ports.Get(s.ID); !ok || kept.Port() != lease.Port() {
+		t.Fatal("stopping a revivable session lost its leased port")
+	}
+	if err := f.n.Kill(t.Context(), s, true, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := f.n.Ports.Get(s.ID); ok {
+		t.Fatal("closed local session kept its lease")
+	}
+}
+
+func TestFailedLocalLaunchReleasesPort(t *testing.T) {
+	f := newFixture(t, "", "*\"new-session\"*) exit 1 ;;")
+	f.n.Ports = leaseRegistry(t)
+	f.p.PortRange = config.PortRangeAuto
+	if _, err := f.n.OpenDirectory(t.Context(), f.p, "lola-local-fail", f.repo, "main", "claude", false); err == nil {
+		t.Fatal("expected tmux launch to fail")
+	}
+	if leases := f.n.Ports.All(); len(leases) != 0 {
+		t.Fatalf("failed launch kept leases: %+v", leases)
 	}
 }
 

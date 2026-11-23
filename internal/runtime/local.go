@@ -14,6 +14,7 @@ import (
 	"github.com/sushidev-team/lola/internal/agent"
 	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/hook"
+	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/state"
 )
@@ -22,14 +23,15 @@ import (
 const LocationAgentTab = "agent-tab"
 
 func localArtifacts(id string) (string, error) {
-	if !strings.HasPrefix(id, "lola-local-") || filepath.Base(id) != id {
-		return "", errors.New("invalid local session id")
-	}
 	home, err := config.Home()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, "local-sessions", id), nil
+	dir := lolaenv.LocalSessionDir(home, id)
+	if dir == "" {
+		return "", errors.New("invalid local session id")
+	}
+	return dir, nil
 }
 
 // OpenDirectory attaches a session to a borrowed directory. All Lola artifacts
@@ -82,6 +84,7 @@ func (n *Native) openDirectory(ctx context.Context, p config.Project, id, dir, l
 	defer func() {
 		if launchErr != nil {
 			_ = os.RemoveAll(artifacts)
+			n.releasePorts(id)
 		}
 	}()
 	vars := EnvVars{Session: id, Project: p.Name, Worktree: dir}
@@ -90,13 +93,13 @@ func (n *Native) openDirectory(ctx context.Context, p config.Project, id, dir, l
 		if sandboxTab {
 			vars.Worktree = filepath.Join(artifacts, "work")
 		}
-		if n.Ports != nil {
-			if lease, ok := n.Ports.Get(owner.ID); ok {
-				vars.Ports = lease.Ports
-			}
+		if lease, ok := n.Ports.Get(owner.ID); ok {
+			vars.Ports = lease.Ports
 		}
+		p = withSessionEnv(p, vars)
+	} else {
+		p = n.sessionProject(p, vars)
 	}
-	p = withSessionEnv(p, vars)
 	env := manualEnvFile(p)
 	if err := os.WriteFile(filepath.Join(artifacts, "shell-env"), env, 0600); err != nil {
 		return session.Session{}, err

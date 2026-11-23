@@ -5,13 +5,74 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/lolaenv"
+	"github.com/sushidev-team/lola/internal/portproc"
 	"github.com/sushidev-team/lola/internal/session"
 )
+
+func TestLocalDevStartsInBorrowedCheckoutWithFreshPorts(t *testing.T) {
+	for _, location := range []string{"main", "checkout"} {
+		t.Run(location, func(t *testing.T) {
+			s := devSession("lola-local-existing")
+			s.Kind, s.Location, s.Worktree = session.KindLocal, location, t.TempDir()
+			line := `printf '%s|%s|%s|%s' "$PROJECT_VALUE" "$PORT" "$NEXTAUTH_URL" "$NEXT_PUBLIC_APP_URL"`
+			d, tm := devDaemon(t, []string{line}, s)
+			p := &d.cfg.Projects[0]
+			p.PortRange = config.PortRangeAuto
+			p.Env = map[string]string{"PORT": "{{.Port}}", "NEXTAUTH_URL": "http://localhost:{{.Port}}", "NEXT_PUBLIC_APP_URL": "http://localhost:{{.Port}}"}
+			d.ports.InUse = func(int) bool { return false }
+			d.portListeners = func(context.Context) ([]portproc.Listener, error) {
+				t.Fatal("local dev start swept for stray processes")
+				return nil, nil
+			}
+			art := lolaenv.LocalSessionDir(d.home, s.ID)
+			if err := os.MkdirAll(art, 0700); err != nil {
+				t.Fatal(err)
+			}
+			// Existing local sessions have these stale port values in their launch files.
+			if err := os.WriteFile(filepath.Join(art, "shell-env"), []byte("PROJECT_VALUE=local\nPORT=''\nNEXTAUTH_URL=http://localhost:\nNEXT_PUBLIC_APP_URL=http://localhost:\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if cmds := d.sessionsData().Sessions[0].DevCommands; !slices.Equal(cmds, []string{line}) {
+				t.Fatalf("Overview dev commands = %v", cmds)
+			}
+			if _, err := d.handleDev(t.Context(), s.ID, true); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command("sh", "-c", tm.sessions[s.ID+"-dev-1"])
+			cmd.Dir = s.Worktree
+			if got, err := cmd.CombinedOutput(); err != nil || string(got) != "local|20000|http://localhost:20000|http://localhost:20000" {
+				t.Fatalf("dev command returned %q, %v", got, err)
+			}
+			if files, err := os.ReadDir(s.Worktree); err != nil || len(files) != 0 {
+				t.Fatalf("borrowed checkout has files %v, %v", files, err)
+			}
+			if _, err := d.handleDev(t.Context(), s.ID, false); err != nil || len(tm.names()) != 0 {
+				t.Fatalf("stop left tabs %v, %v", tm.names(), err)
+			}
+		})
+	}
+}
+
+func TestLocalDevRequiresPrimaryProjectCheckout(t *testing.T) {
+	for _, location := range []string{"temporary", "agent-tab", "ssh", ""} {
+		s := devSession("lola-local-child")
+		s.Kind, s.Location = session.KindLocal, location
+		d, tm := devDaemon(t, []string{"bun run dev"}, s)
+		if cmds := d.sessionsData().Sessions[0].DevCommands; len(cmds) != 0 {
+			t.Fatalf("%q offered %v", location, cmds)
+		}
+		if _, err := d.handleDev(t.Context(), s.ID, true); err == nil || len(tm.names()) != 0 {
+			t.Fatalf("%q accepted a dev start", location)
+		}
+	}
+}
 
 // parallelDevDaemon is devDaemon for a project that leases ports, with a lease
 // recorded for every session in leased.

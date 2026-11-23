@@ -133,6 +133,12 @@ func TestCloseExitedTemporary(t *testing.T) {
 				d := newTestDaemon(t, nativeTestConfig(nativePoll("p1")), &linear.Fake{}, nat)
 				s := session.Session{ID: "lola-local-test", Kind: session.KindLocal, Location: location, Agentless: true, Worktree: t.TempDir()}
 				d.sessions.Upsert(s)
+				if location != "temporary" {
+					d.ports.InUse = func(int) bool { return false }
+					if _, err := d.ports.Acquire(s.ID, "p1", 4100, 4100, 1); err != nil {
+						t.Fatal(err)
+					}
+				}
 				artifacts := filepath.Join(d.home, "local-sessions", s.ID)
 				if err := os.MkdirAll(artifacts, 0700); err != nil {
 					t.Fatal(err)
@@ -152,6 +158,9 @@ func TestCloseExitedTemporary(t *testing.T) {
 				}
 				if _, exists := d.sessions.Get(s.ID); exists == tc.removed {
 					t.Fatalf("record exists = %v", exists)
+				}
+				if _, leased := d.ports.Get(s.ID); leased != (location != "temporary" && !tc.removed) {
+					t.Fatalf("lease exists = %v", leased)
 				}
 				if _, err := os.Stat(s.Worktree); err != nil {
 					t.Fatalf("borrowed directory changed: %v", err)

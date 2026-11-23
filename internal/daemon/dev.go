@@ -69,8 +69,8 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	if !ok {
 		return protocol.DevData{}, fmt.Errorf("unknown session %s", sessionID)
 	}
-	if s.Kind == session.KindLocal {
-		return protocol.DevData{}, errors.New("run dev commands in a shell tab for a shared checkout")
+	if !sessionSupportsDev(s) {
+		return protocol.DevData{}, errors.New("dev commands require a project checkout")
 	}
 	if s.GoalManaged() {
 		return protocol.DevData{}, errors.New("goal previews must run in their isolated validation environment")
@@ -102,6 +102,13 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 		return protocol.DevData{}, fmt.Errorf("project %q is no longer in config", s.Project)
 	}
 	dir := devWorktreeDir(s, p.Name, home)
+	localDir := ""
+	if s.Kind == session.KindLocal {
+		localDir = lolaenv.LocalSessionDir(home, s.ID)
+		if localDir == "" || !filepath.IsAbs(s.Worktree) || d.projectGitBlocked(dir) || localPathWithin(gitCanonical(dir), gitCanonical(home)) {
+			return protocol.DevData{}, errors.New("dev commands require an available host checkout")
+		}
+	}
 	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
 		return protocol.DevData{}, fmt.Errorf("session %s has no worktree at %s", s.ID, dir)
 	}
@@ -138,7 +145,11 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 			}
 			v.Ports = lease.Ports
 		}
-		if err := runtime.WriteDevPortEnv(dir, *dc.project, v); err != nil {
+		envRoot, envDir := dir, dc.dir
+		if localDir != "" {
+			envRoot, envDir = localDir, localDir
+		}
+		if err := runtime.WriteDevPortEnv(envRoot, envDir, *dc.project, v); err != nil {
 			return protocol.DevData{}, fmt.Errorf("prepare dev ports for %s: %w", dc.leaseKey, err)
 		}
 	}
@@ -157,7 +168,10 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	if !parallel {
 		stopped = d.takeOverProject(ctx, tm, s)
 	}
-	freed := d.sweepPortSquatters(ctx, tm, p.Name, home, only)
+	var freed []string
+	if localDir == "" {
+		freed = d.sweepPortSquatters(ctx, tm, p.Name, home, only)
+	}
 
 	var startedTabs []string
 	var errs []error
@@ -171,10 +185,7 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 		if tm.Has(ectx, name) {
 			_ = tm.KillSessionTree(ectx, name)
 		}
-		line := lolaenv.CommandLine(cmd)
-		if hasPortEnv[dc.leaseKey] {
-			line = lolaenv.DevCommandLine(cmd)
-		}
+		line := lolaenv.DevCommandLine(cmd, localDir, hasPortEnv[dc.leaseKey])
 		err := tm.NewSession(ectx, name, dc.dir, line)
 		if err == nil {
 			// Best-effort: without it the tab simply vanishes when the command
@@ -212,6 +223,12 @@ func (d *Daemon) handleDev(ctx context.Context, sessionID string, on bool) (prot
 	}
 	d.logf("", "dev: %s", msg)
 	return protocol.DevData{Active: true, Commands: devLabels(plan), Stopped: stopped, Message: msg}, nil
+}
+
+// Only primary local sessions attached to a project's host checkout run its dev commands.
+func sessionSupportsDev(s session.Session) bool {
+	return s.Kind != session.KindLocal || s.Project != "" && (s.Location == "main" || s.Location == "checkout") &&
+		s.AgentTabParent == "" && s.Sandbox == "" && !s.Stack
 }
 
 // takeOverProject stops the dev tabs of every OTHER session of s's project and

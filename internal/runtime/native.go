@@ -1568,7 +1568,10 @@ func (n *Native) Kill(ctx context.Context, s session.Session, removeWorktree, fo
 			if s.Location == LocationAgentTab {
 				n.untrustAgentDir(s.ID, s.AgentCWD)
 			}
-			return RemoveLocalArtifacts(s.ID)
+			if err := RemoveLocalArtifacts(s.ID); err != nil {
+				return err
+			}
+			n.releasePorts(s.ID)
 		}
 		return nil
 	}

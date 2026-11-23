@@ -58,7 +58,7 @@ func (n *Native) sessionProject(p config.Project, v EnvVars) config.Project {
 // WriteDevPortEnv refreshes the port variables and any project values derived
 // from them for new dev tabs. The agent's original env can carry credentials
 // and callback settings, so the tabs source this overlay after that file.
-func WriteDevPortEnv(sessionDir string, p config.Project, v EnvVars) error {
+func WriteDevPortEnv(sessionDir, envDir string, p config.Project, v EnvVars) error {
 	portEnv := make(map[string]string)
 	for key, value := range p.Env {
 		if strings.Contains(lolaenv.PortTemplates(value), "{{.Port") {
@@ -75,7 +75,7 @@ func WriteDevPortEnv(sessionDir string, p config.Project, v EnvVars) error {
 	contents.WriteByte('\n')
 	contents.Write(manualEnvFile(p))
 
-	rel, err := filepath.Rel(sessionDir, v.Worktree)
+	rel, err := filepath.Rel(sessionDir, envDir)
 	if err != nil {
 		return err
 	}

@@ -976,7 +976,7 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			ReviewTallies: reviewTallyInfos(s),
 		}
 
-		if s.Kind == session.KindLocal {
+		if !sessionSupportsDev(s) {
 			si.DevCommands = nil
 		}
 		if c := s.DevClash; c != nil {

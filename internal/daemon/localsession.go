@@ -75,6 +75,9 @@ func (d *Daemon) handleCloseExitedTemporary(ctx context.Context, id string) (pro
 	if err := runtime.RemoveLocalArtifacts(s.ID); err != nil {
 		d.logf("", "local shell %s: remove launch artifacts: %v", id, err)
 	}
+	if err := d.ports.Release(id); err != nil {
+		d.logf("", "local shell %s: release port lease: %v", id, err)
+	}
 	return protocol.KillData{Removed: true}, nil
 }
 
@@ -253,7 +256,9 @@ func (d *Daemon) handleOpenDirectory(ctx context.Context, a protocol.OpenManualA
 	s.Name = strings.TrimSpace(a.Name)
 	d.sessions.Upsert(s)
 	if err := d.sessions.Save(); err != nil {
-		_ = nat.Kill(cctx, s, false, false)
+		if stopErr := nat.Kill(cctx, s, true, false); stopErr != nil {
+			return protocol.OpenData{}, fmt.Errorf("persist session: %w (could not close it: %v)", err, stopErr)
+		}
 		d.sessions.Delete(id)
 		return protocol.OpenData{}, fmt.Errorf("persist session: %w", err)
 	}
