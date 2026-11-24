@@ -1818,12 +1818,15 @@ an error activity saying so.
 | --- | --- | --- |
 | `enabled` | bool | Gates the whole feature. Default `false`; an absent table means the same. |
 | `client_id` | string | The OAuth app's client id (public, so it may live here). Required when enabled. |
-| `client_secret_keychain` / `client_secret_env` | string | Where the client secret resolves from (Keychain service, then env var). Default service `lola-linear-agent-client-secret`. Used by `login` and token refresh only. |
+| `client_secret_keychain` / `client_secret_env` | string | Where the client secret resolves from (Keychain service, then env var). Default service `lola-linear-agent-client-secret`. OPTIONAL: `login` uses PKCE, so a teammate who was never given the app's secret can install and refresh their own token. A stored secret is sent along when present. |
 | `token_keychain` | string | Keychain service holding the OAuth tokens. Default `lola-linear-agent`. (Env fallback: `LOLA_LINEAR_AGENT_TOKEN`.) |
 | `redirect_port` | int | Loopback port of the login callback. Default `8790`; register `http://localhost:8790/callback` on the OAuth app. |
 | `poll_interval` | duration | How often the loop asks Linear for new sessions and replies. Default `15s`, minimum `5s`. |
 | `webhook_listen` | string | Optional `IP:port` for the webhook doorbell (see below). Empty = off. |
 | `webhook_secret_keychain` / `webhook_secret_env` | string | The webhook signing secret. Default service `lola-linear-agent-webhook-secret`. |
+| `user_id` | string | Your own Linear user id. Empty uses the user of the `[linear]` API key. Sent with the hub heartbeat so a mention can be deferred to your daemon, and compared by `only_when_assigned_to_me`. |
+| `only_when_assigned_to_me` | bool | Several daemons sharing one app token: act only when this session's single owner is you. The owner is the issue's delegate (a human, not lola), else its assignee, else whoever mentioned lola. Others skip silently. Default `false`. |
+| `hub_claim` | string | With a joined hub, which daemon starts a session is decided by the hub: `auto` (default) asks the hub and carries on alone when it cannot answer or is too old, `required` never starts without its grant, `off` never asks. The hub defers a mention to its owner's live daemon, grants one claim, and fences a stalled daemon. |
 
 Every key above except the secret sources is also editable in the settings
 screens — the app's **Settings → Linear agent** tab (which also stores the client
@@ -1835,8 +1838,8 @@ agents and the *agent session events* webhook category if you use one, register
 the redirect URI, then:
 
 ```sh
-lola linear-agent set-secret client   # paste the client secret
-lola linear-agent login               # an admin approves the install
+lola linear-agent login               # an admin approves the install (PKCE: no client secret needed)
+# optional, for a confidential app: lola linear-agent set-secret client
 # config.toml: [linear_agent] enabled = true, client_id = "…"
 lola reload
 ```

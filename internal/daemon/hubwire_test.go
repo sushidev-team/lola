@@ -29,8 +29,10 @@ type fakeHub struct {
 	offers   []hubproto.Item
 	claimErr error
 	beatErr  error
-	lost     []string
-	outErr   error // returned by Complete / Fail / Release / Progress
+	// beatRefuseUser: a hub that knows every field except linear_user_id.
+	beatRefuseUser bool
+	lost           []string
+	outErr         error // returned by Complete / Fail / Release / Progress
 	// progErr is returned by Progress (nil = outErr); failErr by a Fail
 	// carrying pr_url or group (an old hub's 400).
 	progErr error
@@ -88,6 +90,9 @@ func (f *fakeHub) Heartbeat(_ context.Context, hb hubproto.HeartbeatRequest) (hu
 	f.beats = append(f.beats, hb)
 	if f.beatErr != nil {
 		return hubproto.HeartbeatResponse{}, f.beatErr
+	}
+	if f.beatRefuseUser && hb.LinearUserID != "" {
+		return hubproto.HeartbeatResponse{}, &hub.APIError{Status: 400, Code: hubproto.CodeBadRequest}
 	}
 	if f.beatErr400 && hb.PolicyVersion > 0 {
 		return hubproto.HeartbeatResponse{}, &hub.APIError{Status: 400, Code: hubproto.CodeBadRequest}

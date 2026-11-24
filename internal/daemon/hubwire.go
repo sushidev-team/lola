@@ -297,6 +297,9 @@ type hubWire struct {
 	// legacyUntil: until then the hub is treated as predating the chore
 	// lifecycle (no progress, no fail pr_url / group, no policy_version).
 	legacyUntil time.Time
+	// noLinearUserUntil: until then the heartbeat omits linear_user_id, because the
+	// hub refused that field alone (it knows policy_version and the lifecycle).
+	noLinearUserUntil time.Time
 	// cycleFailed is set by hubSetErr during a cycle; a cycle that ends
 	// without it clears lastErr and stamps lastSync.
 	cycleFailed bool
@@ -908,8 +911,23 @@ func (d *Daemon) hubHeartbeat(ctx context.Context, api hubAPI, snap hubSnapshot)
 	}
 	if !d.hubLegacy(d.hub.now()) {
 		req.PolicyVersion = d.hubAppliedPolicy()
+		if !d.hubSkipsLinearUser() {
+			req.LinearUserID = d.linearUserID(ctx)
+		}
 	}
 	resp, err := api.Heartbeat(ctx, req)
+	if err != nil && req.LinearUserID != "" && hubStatusIs(err, 400) {
+		// A hub that predates linear_user_id refuses the unknown field. Retry
+		// without ONLY that field: when that is accepted the hub is not old for
+		// anything else, so it is not marked legacy (which would drop the lifecycle
+		// frames too).
+		retry := req
+		retry.LinearUserID = ""
+		if r2, e2 := api.Heartbeat(ctx, retry); e2 == nil {
+			resp, err, req = r2, nil, retry
+			d.hubMarkNoLinearUser()
+		}
+	}
 	if err != nil && req.PolicyVersion > 0 && hubStatusIs(err, 400) {
 		// A hub that predates policy_version refuses the unknown field:
 		// heartbeat without it rather than go dark. A current hub answers
@@ -2237,4 +2255,19 @@ func hubSessionHub(s session.Session) *protocol.HubSessionHub {
 		LeaseLost: s.HubItem.LeaseLost, LeaseTaken: s.HubItem.LeaseTaken,
 		InReview: s.HubItem.InReview, Released: s.HubItem.Released,
 	}
+}
+
+// hubSkipsLinearUser reports whether the heartbeat should leave linear_user_id out.
+func (d *Daemon) hubSkipsLinearUser() bool {
+	d.hub.mu.Lock()
+	defer d.hub.mu.Unlock()
+	return d.hub.now().Before(d.hub.noLinearUserUntil)
+}
+
+// hubMarkNoLinearUser records that the hub refused linear_user_id alone; it is
+// tried again after hubLegacyRetry.
+func (d *Daemon) hubMarkNoLinearUser() {
+	d.hub.mu.Lock()
+	d.hub.noLinearUserUntil = d.hub.now().Add(hubLegacyRetry)
+	d.hub.mu.Unlock()
 }

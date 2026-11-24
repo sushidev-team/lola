@@ -23,6 +23,17 @@ type AgentSession struct {
 	CreatedAt string
 	URL       string
 	Issue     *Issue // nil for a session not on an issue (lola ignores those)
+	// Who is involved, as Linear user ids (empty when unknown). Routing data only:
+	// they pick which daemon acts, they never gate a send or a write.
+	CreatorID  string // the human who mentioned or delegated
+	AssigneeID string
+	// An app user (lola itself or another agent) is never recorded here: only a
+	// human can own a session, so a delegate that is some other agent cannot hide
+	// the assignee from every daemon.
+	DelegateID string // the app user itself when a human delegated to lola
+	// MentionBody is the text of the comment the human wrote when they mentioned
+	// lola ("@lola go ahead"); empty for a plain delegation. UNTRUSTED text.
+	MentionBody string
 }
 
 // AgentPrompt is one HUMAN message in a session (a `prompt` activity): a reply
@@ -125,8 +136,9 @@ const agentMaxPages = 6
 func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 	const q = `query($after: String){ agentSessions(first:50, after:$after, orderBy:updatedAt){
 		nodes{ id status createdAt url
+			creator{ id app } sourceComment{ body }
 			issue{ id identifier title branchName priority createdAt
-				team{ id } project{ id } } }
+				team{ id } project{ id } assignee{ id app } delegate{ id app } } }
 		pageInfo{ hasNextPage endCursor } } }`
 	var (
 		out   []AgentSession
@@ -138,11 +150,20 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 				Nodes []struct {
 					ID, Status, CreatedAt string
 					URL                   *string
-					Issue                 *struct {
+					Creator               *struct {
+						ID  string
+						App bool
+					}
+					SourceComment *struct{ Body string }
+					Issue         *struct {
 						ID, Identifier, Title, BranchName, CreatedAt string
 						Priority                                     float64
 						Team                                         *struct{ ID string }
 						Project                                      *struct{ ID string }
+						Assignee, Delegate                           *struct {
+							ID  string
+							App bool
+						}
 					}
 				}
 				PageInfo struct {
@@ -159,6 +180,12 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 			if n.URL != nil {
 				s.URL = *n.URL
 			}
+			if n.Creator != nil && !n.Creator.App {
+				s.CreatorID = n.Creator.ID
+			}
+			if n.SourceComment != nil {
+				s.MentionBody = n.SourceComment.Body
+			}
 			if n.Issue != nil {
 				is := &Issue{ID: n.Issue.ID, Identifier: n.Issue.Identifier, Title: n.Issue.Title,
 					BranchName: n.Issue.BranchName, Priority: n.Issue.Priority, CreatedAt: n.Issue.CreatedAt}
@@ -167,6 +194,12 @@ func (c *Client) AgentSessions(ctx context.Context) ([]AgentSession, error) {
 				}
 				if n.Issue.Project != nil {
 					is.ProjectID = n.Issue.Project.ID
+				}
+				if n.Issue.Assignee != nil && !n.Issue.Assignee.App {
+					s.AssigneeID = n.Issue.Assignee.ID
+				}
+				if n.Issue.Delegate != nil && !n.Issue.Delegate.App {
+					s.DelegateID = n.Issue.Delegate.ID
 				}
 				s.Issue = is
 			}
@@ -296,4 +329,18 @@ func (c *Client) updateAgentSession(ctx context.Context, sessionID string, in ma
 		return fmt.Errorf("agentSessionUpdate: success=false")
 	}
 	return nil
+}
+
+// Owner is the ONE human a session belongs to, by the shared routing order:
+// the delegate, else the assignee, else the creator. The app user itself
+// (appUserID) is skipped: delegating to lola sets the delegate to lola, which
+// names no person. Every daemon computes the same answer from the same data, so
+// at most one of them matches its own user id. "" means no human is known.
+func (s AgentSession) Owner(appUserID string) string {
+	for _, id := range []string{s.DelegateID, s.AssigneeID, s.CreatorID} {
+		if id != "" && id != appUserID {
+			return id
+		}
+	}
+	return ""
 }

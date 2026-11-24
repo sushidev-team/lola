@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/sushidev-team/lola/compare/v0.17.0...v0.17.1) (2026-11-22)
+
+
+### Bug Fixes
+
+* **mobile:** route sandbox tab login checks locally ([f83cc4d](https://github.com/sushidev-team/lola/commit/f83cc4dcad66e9d1f0b2ceda8cec68a730722bad))
+
 ## [0.17.0](https://github.com/sushidev-team/lola/compare/v0.16.0...v0.17.0) (2026-11-22)
 
 
