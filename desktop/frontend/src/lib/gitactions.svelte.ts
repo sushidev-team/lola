@@ -9,7 +9,7 @@ import type { IconName } from './icons';
 
 type Context = { git: ProjectGitState; ref: string; limit: number; configuredPath?: string };
 export type GitDestination = { remote: string; name: string; trackingOnly?: boolean };
-type Callbacks = { openSession?: (id: string) => void; compareBranches?: (source: GitRef, target: GitRef) => void; isManagedWorktree?: (tree: GitWorktree) => boolean; removeManagedWorktree?: (tree: GitWorktree, deleteBranch: boolean, onRemoved: () => Promise<void>) => void; createPullRequest?: (branch:GitRef,target?:GitRef)=>void; viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string, baseRef?: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
+type Callbacks = { revealPulledTip?: (branch: GitRef) => void; openSession?: (id: string) => void; compareBranches?: (source: GitRef, target: GitRef) => void; isManagedWorktree?: (tree: GitWorktree) => boolean; removeManagedWorktree?: (tree: GitWorktree, deleteBranch: boolean, onRemoved: () => Promise<void>) => void; createPullRequest?: (branch:GitRef,target?:GitRef)=>void; viewHistory: (ref: string) => void; openWorktree: (path: string) => void; viewCommit: (sha: string) => void; inspectFile?: (file: GitFile, staged: boolean) => void; stageFiles?: (paths: string[], staged: boolean) => void; createWorktree?: (branch: GitRef) => void; compareWorking?: (sha: string) => void; publishBranch?: (branch: GitRef, destination?: GitDestination) => void; createBranch?: (sha: string, label: string, baseRef?: string) => void; compareCommit?: (sha: string) => void; canCompareCommit?: (sha: string) => boolean };
 export type GitMenuItem = { label: string; icon: IconName; run: () => void; disabled?: boolean; danger?: boolean; separator?: boolean; /** Why a disabled item is disabled, shown under its label. */ hint?: string };
 export type GitMenuRequest = { title: string; subtitle?: string; x: number; y: number; items: GitMenuItem[]; anchor: HTMLElement | null };
 
@@ -75,7 +75,7 @@ export class GitActions {
   private branchRequest(action: string, source?: GitRef, target?: GitRef): GitBranchAction {
     return { action, source: source?.fullName ?? '', sourceSHA: source?.sha ?? '', target: target?.fullName ?? '', targetSHA: target?.sha ?? '' };
   }
-  private async execute(context: Context, request: GitBranchAction) {
+  private async execute(context: Context, request: GitBranchAction, pull = ['pull', 'pull-stash'].includes(request.action) ? request : undefined) {
     if (this.disposed || context.git !== this.context().git) return;
     let active = context;
     // Open a branch's existing checkout before starting an operation there, so
@@ -102,6 +102,10 @@ export class GitActions {
     }
     if (path !== null && active.git === this.context().git && ['delete-branch', 'remove-worktree-branch'].includes(request.action) && this.context().ref === request.source) this.callbacks.viewHistory('');
     if (path !== null && active.git === this.context().git && ['checkout', 'merge', 'rebase'].includes(request.action)) this.callbacks.openWorktree(path);
+    if (pull && path !== null && !this.disposed && active.git === this.context().git) {
+      const branch = this.current();
+      if (branch?.fullName === pull.source && branch.sha !== pull.sourceSHA) this.callbacks.revealPulledTip?.(branch);
+    }
   }
   private action(action: string, source?: GitRef, target?: GitRef) { void this.execute(this.context(), this.branchRequest(action, source, target)); }
   // A pull refused only because local changes are in the way is retried as
@@ -207,7 +211,7 @@ export class GitActions {
       if (!valid() || source.sha !== request.sourceSHA) return;
       const upstream=this.upstream(source), full=upstream.startsWith('refs/')?upstream:`refs/remotes/${upstream}`;
       const remote=git.snapshot?.refs.find(branch=>branch.remote && branch.fullName===full);
-      if(remote) return {label:'Merge remote changes',run:()=>{if(valid() && git.snapshot?.refs.some(branch=>branch.fullName===remote.fullName && branch.sha===remote.sha)) void this.execute(context,this.branchRequest('merge',remote,source));}};
+      if(remote) return {label:'Merge remote changes',run:()=>{if(valid() && git.snapshot?.refs.some(branch=>branch.fullName===remote.fullName && branch.sha===remote.sha)) void this.execute(context,this.branchRequest('merge',remote,source),request);}};
     }
   }
   pull(branch = this.current()) {

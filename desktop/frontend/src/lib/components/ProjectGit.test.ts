@@ -106,6 +106,32 @@ describe('Project Git workspace', () => {
     await waitFor(() => expect(api.BranchAction).toHaveBeenCalledWith(project, '', expect.objectContaining({action:'pull',source:'refs/heads/main',sourceSHA:newSHA})));
     expect(api.Pull).not.toHaveBeenCalled();
   });
+  it.each(['pull', 'pull-stash'])('scrolls the updated checkout tip below the graph header after %s', async action => {
+    const updated = snapshot();
+    const head = 'c'.repeat(40);
+    // Another branch still has the first commit in the refreshed graph.
+    updated.commits.splice(1, 0, {...updated.commits[0], sha: head, parents: [oldSHA], subject: 'Pulled commit'});
+    updated.head = updated.refs[0].sha = updated.worktrees[0].head = head;
+    if (action === 'pull-stash') api.BranchAction.mockRejectedValueOnce(new Error('commit or stash this checkout’s changes before integrating branches'));
+    api.BranchAction.mockImplementation(async () => {
+      api.Snapshot.mockResolvedValue(updated);
+      return {path: updated.path};
+    });
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains('history-columns')) return new DOMRect(0, 50, 600, 26);
+      return new DOMRect(0, this.dataset.commit === head ? 110 : 0, 600, 34);
+    });
+    await open();
+    const history = screen.getByRole('group', {name: /Commits; Command/});
+    history.scrollTop = 300;
+    await fireEvent.click(screen.getByRole('button', {name:'Pull'}));
+    await waitFor(() => expect(history.scrollTop).toBe(334));
+
+    history.scrollTop = 170;
+    await fireEvent.click(screen.getByRole('button', {name:'Pull'}));
+    await waitFor(() => expect(screen.getByRole('button', {name:'Pull'})).toBeEnabled());
+    expect(history.scrollTop).toBe(170);
+  });
   it('only announces the completed pull when Lola can stash and restore local changes', async () => {
     api.BranchAction.mockRejectedValueOnce(new Error('commit or stash this checkout’s changes before integrating branches'));
     await open();

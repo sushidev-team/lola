@@ -161,6 +161,7 @@
   }
   const gitActions = new GitActions(() => ({ git, ref, limit, configuredPath }), {
     viewHistory: chooseRef,
+    revealPulledTip: branch => { if (active) void goToBranch(branch, 'pull'); },
     compareBranches: (source, target) => { branchJump++; comparisonBranches = [target, source]; selected = [target.sha, source.sha]; area = 'commit'; diffOpen = true; path = ''; activeFile = ''; },
     createPullRequest: openPullRequest,
     openWorktree: (value) => chooseWorktree(value === configuredPath ? '' : value),
@@ -571,17 +572,29 @@
   let branchJump = 0;
   let focusedBranch = $state('');
   let historyList = $state<HTMLDivElement>();
-  async function goToBranch(branch: GitRef) {
+  async function goToBranch(branch: GitRef, reason: 'select' | 'pull' = 'select') {
     const state = git, jump = ++branchJump;
-    ref = ''; query = ''; showRail = false; focusedBranch = branch.fullName;
+    if (reason === 'select') {
+      ref = ''; query = ''; showRail = false; focusedBranch = branch.fullName;
+    } else if (!visible.some(commit => commit.sha === branch.sha)) {
+      if (!graphBySHA.has(branch.sha) && ref !== branch.fullName) ref = '';
+      if (query) closeSearch();
+    }
     await tick();
     await historyLoad;
     if (state !== git || jump !== branchJump) return;
     const sha = await state.revealBranchTip(branch);
     if (!sha || state !== git || jump !== branchJump) return;
-    selected = [sha]; area = 'commit'; diffOpen = false; path = ''; activeFile = '';
+    if (reason === 'select') {
+      selected = [sha]; area = 'commit'; diffOpen = false; path = ''; activeFile = '';
+    }
     await tick();
-    historyList?.querySelector<HTMLElement>(`[data-commit="${sha}"]`)?.scrollIntoView?.({block:'center'});
+    if (state !== git || jump !== branchJump || !historyList) return;
+    const row = historyList.querySelector<HTMLElement>(`[data-commit="${sha}"]`);
+    if (reason === 'pull') {
+      const header = historyList.querySelector('.history-columns');
+      if (active && row && header) historyList.scrollTop += row.getBoundingClientRect().top - header.getBoundingClientRect().bottom;
+    } else row?.scrollIntoView?.({block:'center'});
   }
   function chooseRef(value: string) { branchJump++; focusedBranch = value; ref = value; limit = 200; query = ''; showRail = false; }
   function historyKey(event: KeyboardEvent) {
