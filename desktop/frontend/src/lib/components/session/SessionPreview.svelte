@@ -374,8 +374,22 @@
   }
 
   async function signIn(project: string, name: string, signal: AbortSignal, automatic = false) {
-    const win = frame?.contentWindow, doc = documentId, origin = frameOrigin, request = req;
-    if (!active || !request || !win || !pickerReady || !doc) throw new Error("Open the local sign-in page first.");
+    const win = frame?.contentWindow, origin = frameOrigin, request = req;
+    if (!active || !request || !win || !origin) throw new Error("The local preview is still opening.");
+    if (!pickerReady || !documentId) {
+      // Ask the current document to identify itself again after a redirect.
+      win.postMessage({ target: PICKER_SOURCE, type: "hello", watchLocation: !!tab }, origin);
+      for (let i = 0; i < 20 && (!pickerReady || !documentId); i++) {
+        if (signal.aborted) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      if (signal.aborted) return;
+      if (!active || frame?.contentWindow !== win || frameOrigin !== origin || req !== request || !pickerReady || !documentId) {
+        throw new Error("The page didn’t connect to the local preview. Reload the preview and try again.");
+      }
+    }
+    const doc = documentId;
+    if (preparing && !automatic) throw new Error("Wait for the preview to finish preparing, then choose the login again.");
     const getAccount = automatic ? PreviewService.AutoTestLogin : PreviewService.UseTestLogin;
     const account = await getAccount(request.sessionId, request.url, project, name, origin);
     if (signal.aborted || !account) return;
@@ -649,7 +663,7 @@
               </Button>
             </div>
             {#if active && loginsOpen}
-              <TestLogins session={req.sessionId} url={req.url} ready={pickerReady && !!documentId && !preparing} {signIn} close={closeLogins} />
+              <TestLogins session={req.sessionId} url={req.url} {signIn} close={closeLogins} />
             {/if}
           {/if}
           {#if replay}

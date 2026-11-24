@@ -18,7 +18,7 @@ it("saves named accounts, signs in on demand and keeps existing passwords on edi
   vi.mocked(PreviewService.TestLogins).mockResolvedValueOnce({ project: "web", autoLogin: noAuto, profiles: [] })
     .mockResolvedValue({ project: "web", autoLogin: noAuto, profiles: [account] });
   const signIn = vi.fn(), close = vi.fn();
-  render(TestLogins, { session, url, ready: true, signIn, close });
+  render(TestLogins, { session, url, signIn, close });
   await fireEvent.click(await screen.findByRole("button", { name: "Add login" }));
   await fireEvent.input(screen.getByLabelText("Login name"), { target: { value: account.name } });
   await fireEvent.input(screen.getByLabelText("Username or email"), { target: { value: account.username } });
@@ -91,7 +91,7 @@ it("switches the single auto-login checkbox and allows clearing it", async () =>
     .mockResolvedValueOnce({ project: "shop", autoLogin: { name: "Buyer", origin: url }, profiles })
     .mockResolvedValueOnce({ project: "shop", autoLogin: { name: "Admin", origin: url }, profiles })
     .mockResolvedValueOnce({ project: "shop", autoLogin: noAuto, profiles });
-  render(TestLogins, { session: "s", url, ready: true, signIn: vi.fn(), close: vi.fn() });
+  render(TestLogins, { session: "s", url, signIn: vi.fn(), close: vi.fn() });
   const buyer = await screen.findByRole("checkbox", { name: "Auto-login as Buyer" });
   const admin = screen.getByRole("checkbox", { name: "Auto-login as Admin" });
   expect(buyer).toBeChecked();
@@ -107,7 +107,7 @@ it("switches the single auto-login checkbox and allows clearing it", async () =>
 it("uses the selected account on a matching form only once across a login redirect", async () => {
   const url = "http://localhost:3000", origin = "http://p-example.localhost:5555";
   vi.mocked(PreviewService.Open).mockResolvedValue(origin + "/login");
-  vi.mocked(PreviewService.TestLogins).mockResolvedValue({ project: "shop", profiles: [], autoLogin: { name: "Buyer", origin: url } });
+  vi.mocked(PreviewService.TestLogins).mockResolvedValue({ project: "shop", profiles: [{ name: "Buyer", username: "buyer", agent: false }], autoLogin: { name: "Buyer", origin: url } });
   vi.mocked(PreviewService.AutoTestLogin).mockResolvedValue({ username: "buyer", password: "fixture" });
   render(PreviewWorkspace);
   preview.open("s", url);
@@ -126,6 +126,33 @@ it("uses the selected account on a matching form only once across a login redire
     await say("ready", "redirect");
     await say("login-form", "redirect");
     expect(PreviewService.AutoTestLogin).toHaveBeenCalledTimes(1);
+    vi.mocked(PreviewService.UseTestLogin).mockResolvedValue({ username: "buyer", password: "fixture" });
+    await fireEvent.click(screen.getByRole("button", { name: "Test logins" }));
+    expect(await screen.findByRole("checkbox", { name: "Auto-login as Buyer" })).toBeChecked();
+    await fireEvent.click(screen.getByRole("button", { name: /Buyer buyer/ }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith({
+      target: "lola-preview", type: "test-login", documentId: "redirect", username: "buyer", password: "fixture",
+    }, origin));
+  } finally { post.mockRestore(); }
+});
+
+it("reconnects to the redirected login document when a saved login is clicked before ready", async () => {
+  const url = "http://localhost:20016/cp/dashboard", origin = "http://p-example.localhost:5555";
+  vi.mocked(PreviewService.Open).mockResolvedValue(origin + "/cp/dashboard");
+  vi.mocked(PreviewService.TestLogins).mockResolvedValue({ project: "shop", autoLogin: noAuto,
+    profiles: [{ name: "Buyer", username: "buyer", agent: false }] });
+  vi.mocked(PreviewService.UseTestLogin).mockResolvedValue({ username: "buyer", password: "fixture" });
+  render(PreviewWorkspace);
+  preview.open("s", url);
+  const frame = await screen.findByTitle(/Preview of localhost:20016/) as HTMLIFrameElement;
+  const post = vi.spyOn(frame.contentWindow!, "postMessage");
+  try {
+    await fireEvent.click(screen.getByRole("button", { name: "Test logins" }));
+    await fireEvent.click(await screen.findByRole("button", { name: /Buyer buyer/ }));
+    expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "hello" }), origin);
     expect(PreviewService.UseTestLogin).not.toHaveBeenCalled();
+    await fireEvent(window, new MessageEvent("message", { source: frame.contentWindow, origin,
+      data: { source: "lola-preview", type: "ready", documentId: "login", url: origin + "/cp/auth/login" } }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith(expect.objectContaining({ type: "test-login", documentId: "login" }), origin));
   } finally { post.mockRestore(); }
 });

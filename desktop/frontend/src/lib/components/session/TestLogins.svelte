@@ -6,8 +6,8 @@
   import Checkbox from "../Checkbox.svelte";
   import Icon from "../Icon.svelte";
 
-  let { session, url, ready, signIn, close }: {
-    session: string; url: string; ready: boolean; signIn: (project: string, name: string, signal: AbortSignal) => Promise<void>; close: () => void;
+  let { session, url, signIn, close }: {
+    session: string; url: string; signIn: (project: string, name: string, signal: AbortSignal) => Promise<void>; close: () => void;
   } = $props();
   let busy = $state(false);
   let error = $state("");
@@ -79,7 +79,7 @@
       <div class="border-b border-edge pb-2">
         <div class="flex min-w-0 items-center gap-1">
           <button type="button" class="min-w-0 flex-1 rounded px-1 py-1 text-left enabled:hover:bg-sel disabled:opacity-60"
-            title={ready ? 'Sign in as ' + p.name : 'Open the local sign-in page to use this login'} disabled={busy || !ready}
+            title={'Sign in as ' + p.name} disabled={busy}
             onclick={() => perform(async () => { await signIn(project, p.name, lifetime.signal); if (!lifetime.signal.aborted) close(); })}>
             <span class="block truncate font-medium">{p.name}</span><span class="block truncate text-xs text-faint">{p.username}</span>
           </button>
