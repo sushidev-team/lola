@@ -12,6 +12,11 @@ export function AddGroup(_label: string): Promise<string> {
 }
 
 /** PLATFORM. */
+export function AddProjectsFromFolder(_group: string, _paths: string[] | null): Promise<number> {
+  return unsupported("ConfigService.AddProjectsFromFolder", CONFIG);
+}
+
+/** PLATFORM. */
 export function ClearSandboxToken(): Promise<void> {
   return unsupported("ConfigService.ClearSandboxToken", CONFIG);
 }
@@ -219,6 +224,11 @@ export function SaveTeamLimits(_d: M.TeamLimitsDTO): Promise<void> {
 }
 
 /** PLATFORM. */
+export function ScanProjectFolder(_parent: string): Promise<M.StackFolderDTO> {
+  return unsupported("ConfigService.ScanProjectFolder", CONFIG);
+}
+
+/** PLATFORM. */
 export function ScanStackFolder(_path: string): Promise<M.StackFolderDTO> {
   return unsupported("ConfigService.ScanStackFolder", CONFIG);
 }
@@ -300,6 +310,7 @@ export function ValidateLinearKey(_key: string): Promise<void> {
 
 export const ROUTES: Routes<typeof Gen.ConfigService> = {
   AddGroup: { kind: "platform", reason: CONFIG },
+  AddProjectsFromFolder: { kind: "platform", reason: CONFIG },
   ClearSandboxToken: { kind: "platform", reason: CONFIG },
   ConfigExists: { kind: "local" },
   AddStackMembersFromFolder: { kind: "platform", reason: CONFIG },
@@ -345,6 +356,7 @@ export const ROUTES: Routes<typeof Gen.ConfigService> = {
   SaveSSHHost: { kind: "platform", reason: CONFIG },
   SaveSettings: { kind: "platform", reason: CONFIG },
   SaveTeamLimits: { kind: "platform", reason: CONFIG },
+  ScanProjectFolder: { kind: "platform", reason: CONFIG },
   ScanStackFolder: { kind: "platform", reason: CONFIG },
   ScanStackMembers: { kind: "platform", reason: CONFIG },
   SetAppearance: { kind: "absent" },
