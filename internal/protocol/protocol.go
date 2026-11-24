@@ -1212,11 +1212,12 @@ type FeedbackArgs struct {
 // are clipped by the daemon. They are UNTRUSTED text from a page the agent
 // itself may have written, delivered as quoted evidence, never as an instruction.
 type FeedbackElement struct {
-	URL      string `json:"url,omitempty"`
-	Selector string `json:"selector"`
-	HTML     string `json:"html,omitempty"`
-	Text     string `json:"text,omitempty"`
-	Note     string `json:"note"`
+	Annotation string `json:"annotation,omitempty"` // Drawing geometry and enclosed DOM targets, quoted as page evidence.
+	URL        string `json:"url,omitempty"`
+	Selector   string `json:"selector"`
+	HTML       string `json:"html,omitempty"`
+	Text       string `json:"text,omitempty"`
+	Note       string `json:"note"`
 }
 
 // FeedbackComment is one line comment. Quote optionally carries the commented

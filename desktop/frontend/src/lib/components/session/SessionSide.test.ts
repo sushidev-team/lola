@@ -3,9 +3,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { freshSession, ssh, terms, store, talkSvc } from './talk.testkit';
 import { SSH } from '$lib/terms.svelte';
 import { feed } from '$lib/feed.svelte';
+import { feedback } from '$lib/feedback.svelte';
 import { changes } from '$lib/changes.svelte';
 import { preview } from '$lib/preview.svelte';
 import { DaemonService, PreviewService } from '@bindings/desktop';
+import ConfirmDialog from '../ConfirmDialog.svelte';
 import SessionPreview from './SessionPreview.svelte';
 import PreviewWorkspace from './PreviewWorkspace.svelte';
 import SessionSide from './SessionSide.svelte';
@@ -337,7 +339,7 @@ it('reopens a verified protected route directly and replays sign-in when the rou
   expect(open).toHaveBeenCalledTimes(3);
 });
 
-it('waits for the picker and preserves edits made during a feedback send', async () => {
+it('saves preview comments before sending and retains newer drafts and unrelated review notes', async () => {
   const origin = 'http://preview.localhost:5555', url = 'http://localhost:3000';
   const id = freshSession({ devUrls: [url] });
   vi.mocked(PreviewService.Open).mockResolvedValue(origin + '/');
@@ -364,14 +366,23 @@ it('waits for the picker and preserves edits made during a feedback send', async
     await say({ type: 'pick', selector: '#title', url: origin + '/#/details' });
     const note = screen.getByRole('textbox', { name: 'Element comment' });
     await fireEvent.input(note, { target: { value: 'Change title' } });
-    await fireEvent.click(screen.getByRole('button', { name: 'Send to agent' }));
+    const calls = vi.mocked(DaemonService.SendFeedback).mock.calls.length;
+    await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    expect(DaemonService.SendFeedback).toHaveBeenCalledTimes(calls);
+    feedback.setNote(id, 'Separate code review');
+    feedback.addElement(id, {url: url + '/settings', reviewKey: 'settings-review', selector: '#second', note: 'Also fix spacing'});
+    await fireEvent.click(await screen.findByRole('button', { name: 'Send feedback (2)' }));
     expect(DaemonService.SendFeedback).toHaveBeenCalledWith({
-      session: id, elements: [expect.objectContaining({ url: url + '/#/details', note: 'Change title' })],
+      session: id, comments: [], note: '', elements: [
+        expect.objectContaining({ url: url + '/#/details', note: 'Change title' }),
+        expect.objectContaining({ selector: '#second', note: 'Also fix spacing' }),
+      ],
     });
-    await fireEvent.input(note, { target: { value: 'Change title and spacing' } });
+    feedback.addElement(id, {url, selector: '#title', note: 'A later comment'});
     finish();
     await waitFor(() => expect(refresh).toHaveBeenCalled());
-    expect(screen.getByRole('textbox', { name: 'Element comment' })).toHaveValue('Change title and spacing');
+    expect(feedback.elementsFor(id).map(e => e.note)).toEqual(['A later comment']);
+    expect(feedback.noteFor(id)).toBe('Separate code review');
   } finally { preview.close(); refresh.mockRestore(); }
 });
 
@@ -400,7 +411,7 @@ it('attaches pasted and dropped images to the selected element, and keeps failed
     await say({ type: 'mode', picking: true });
     await say({ type: 'pick', selector: '#picked', url: origin });
     const dialog = screen.getByRole('dialog', { name: 'Element comment' });
-    const field = within(dialog).getByRole('textbox'), send = within(dialog).getByRole('button', {name:'Send to agent'});
+    const field = within(dialog).getByRole('textbox'), send = within(dialog).getByRole('button', {name:'Save'});
     await fireEvent.paste(field, { clipboardData: { getData: () => '', items: [{type:'image/png'}] } });
     expect(talkSvc.AttachClipboardImage).toHaveBeenCalledWith(root);
     const drop = (target: string, files: string[]) => (window as any)._wails.dispatchWailsEvent({ name: 'files:dropped', data: { target, files } });
@@ -415,8 +426,9 @@ it('attaches pasted and dropped images to the selected element, and keeps failed
     expect(await fireEvent.paste(field, { clipboardData: { getData: () => 'ordinary words' } })).toBe(true);
     await fireEvent.input(field, { target: { value: 'Match this design' } });
     await fireEvent.click(send);
+    await fireEvent.click(screen.getByRole('button', {name:'Send feedback (1)'}));
     expect(DaemonService.SendFeedback).toHaveBeenCalledWith({
-      session: id, elements: [expect.objectContaining({ selector: '#picked', note: ['Match this design', first, second].join('\n') })],
+      session: id, comments: [], note: '', elements: [expect.objectContaining({ selector: '#picked', note: ['Match this design', first, second].join('\n') })],
     });
     expect(ssh.view(id).sentThumbs.get(first)).toBe(thumb);
   } finally { preview.close(); refresh.mockRestore(); }
@@ -652,4 +664,94 @@ it('opens dev and external new-tab links in Preview, keeping the source page liv
     cleanup();
     vi.unstubAllGlobals();
   }
+});
+
+it('edits a staged label inline and sends its revised text alongside the drawings', async () => {
+  const origin = 'http://preview.localhost:5555', url = 'http://localhost:3000';
+  const id = freshSession({ devUrls: [url] });
+  vi.mocked(PreviewService.Open).mockResolvedValue(origin);
+  vi.mocked(DaemonService.SendFeedback).mockResolvedValueOnce({ queued: true } as never);
+  const refresh = vi.spyOn(store, 'refresh').mockResolvedValue();
+  const calls = vi.mocked(DaemonService.SendFeedback).mock.calls.length;
+  render(SessionPreview, { inline: {sessionId: id, url} });
+  try {
+    const frame = await screen.findByTitle('Preview of localhost:3000') as HTMLIFrameElement;
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+    const say = (data: object) => fireEvent(window, new MessageEvent('message', {
+      source: frame.contentWindow, origin, data: {source:'lola-preview', documentId:'test-page', ...data},
+    }));
+    await say({type:'ready', url:origin});
+    const button = (name: string) => screen.getByRole('button', { name });
+    const place = async (name: string) => {
+      await fireEvent.click(button(name));
+      await say({type:'mode', picking:true});
+      await fireEvent.click(button('Place preview annotation')); // Keyboard placement.
+      await say({type:'pick', selector:'#delivery', url:origin, rect:{x:0,y:0,w:50,h:50}});
+      await say({type:'mode', picking:false});
+    };
+    await place('Draw arrow');
+    expect(screen.queryByRole('textbox', {name:'Element comment'})).toBeNull();
+    await place('Draw rectangle');
+    expect(feedback.elementsFor(id).map(e => e.mark?.kind)).toEqual(['arrow', 'area']);
+    await place('Draw freehand');
+    const tracking = post.mock.calls.map(([m]) => m).findLast(m => m.type === 'comment-anchors' && m.anchors.length === 3);
+    await say({type:'comment-bounds', revision:tracking.revision, rects:[{number:3,x:25,y:10,w:24,h:12}]});
+    const stroke = button('Move annotation 3');
+    stroke.focus();
+    await fireEvent.keyDown(stroke, {key:'Backspace'});
+    expect(feedback.elementsFor(id).map(e => e.mark?.kind)).toEqual(['arrow', 'area']);
+    await place('Place text label');
+    const label = screen.getByRole('textbox', {name:'Text label'});
+    expect(screen.queryByRole('dialog', {name:'Element comment'})).toBeNull();
+    await fireEvent.input(label, {target:{value:'Shipping'}});
+    await fireEvent.keyDown(label, {key:'Enter'});
+    const anchors = post.mock.calls.map(([m]) => m).findLast(m => m.type === 'comment-anchors' && m.anchors.length === 3);
+    await say({type:'comment-bounds', revision:anchors.revision, rects:[{number:3,x:25,y:10,w:1,h:1}]});
+    await fireEvent.dblClick(screen.getByText('Shipping'));
+    const reopened = screen.getByRole('textbox', {name:'Text label'});
+    expect(reopened).toHaveFocus();
+    expect(reopened).toHaveValue('Shipping');
+    expect(screen.queryByRole('dialog', {name:'Element comment'})).toBeNull();
+    expect(screen.queryByRole('button', {name:'Live comment 3'})).toBeNull();
+    await fireEvent.input(reopened, {target:{value:'Delivery options'}});
+    expect(DaemonService.SendFeedback).toHaveBeenCalledTimes(calls);
+    await fireEvent.click(button('Send feedback (3)'));
+    expect(DaemonService.SendFeedback).toHaveBeenLastCalledWith(expect.objectContaining({
+      session:id, elements:[
+        expect.objectContaining({annotation:expect.stringContaining('Arrow at')}),
+        expect.objectContaining({annotation:expect.stringContaining('Rectangle at')}),
+        expect.objectContaining({selector:':root', annotation:expect.stringContaining('Position anchor: #delivery\nLabel: Delivery options'), note:'Delivery options'}),
+      ],
+    }));
+    await waitFor(() => expect(feedback.elementsFor(id)).toHaveLength(0));
+  } finally { feedback.clear(id); refresh.mockRestore(); }
+});
+
+it('confirms clearing preview feedback and keeps the session’s diff drafts', async () => {
+  const url = 'http://localhost:3000', id = freshSession({ devUrls: [url] });
+  vi.mocked(PreviewService.Open).mockResolvedValue('http://preview.localhost');
+  const add = () => feedback.addElement(id, { selector: '#price', url, note: 'Check price' });
+  feedback.setNote(id, 'Review the diff too');
+  add();
+  render(SessionPreview, { inline: { sessionId: id, url } });
+  render(ConfirmDialog);
+  const button = (name: string) => screen.getByRole('button', { name });
+  try {
+    await fireEvent.click(button('Clear all'));
+    await fireEvent.click(button('Cancel'));
+    expect(feedback.elementsFor(id)).toHaveLength(1);
+    const escape = () => fireEvent.keyDown(button('Clear all'), { key: 'Escape' });
+    await escape();
+    expect(screen.getByText(/again to clear preview feedback/)).toBeVisible();
+    expect(feedback.elementsFor(id)).toHaveLength(1);
+    await fireEvent.keyDown(button('Clear all'), { key:'Escape', repeat:true });
+    expect(feedback.elementsFor(id)).toHaveLength(1);
+    await escape();
+    expect(feedback.elementsFor(id)).toHaveLength(0);
+    add();
+    await fireEvent.click(await screen.findByRole('button', {name:'Clear all'}));
+    await fireEvent.click(button('Clear feedback'));
+    expect(feedback.elementsFor(id)).toHaveLength(0);
+    expect(feedback.noteFor(id)).toBe('Review the diff too');
+  } finally { feedback.clear(id); }
 });

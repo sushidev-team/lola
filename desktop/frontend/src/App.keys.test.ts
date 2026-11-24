@@ -44,6 +44,7 @@ const { nav } = await import("$lib/nav.svelte");
 const { ssh } = await import("$lib/ssh.svelte");
 const { terms, AGENT, SSH } = await import("$lib/terms.svelte");
 const { preview } = await import("$lib/preview.svelte");
+const { feedback } = await import("$lib/feedback.svelte");
 const { confirm } = await import("$lib/confirm.svelte");
 const { allTabs, closeTab } = await import("$lib/docklayout");
 const { OVERVIEW_PANEL } = await import("$lib/sessionpanels");
@@ -312,6 +313,23 @@ describe("in a session", () => {
     } finally {
       preview.close();
     }
+  });
+  it("gives the clear-feedback confirmation priority over the preview", async () => {
+    const url = "http://localhost:5173";
+    await mount([plain(A, { devUrls: [url] })]);
+    preview.open(A, url);
+    feedback.addElement(A, { url, selector: "#heading", note: "Check heading" });
+    try {
+      await fireEvent.click(await screen.findByRole("button", { name: "Clear all" }));
+      const dialog = await screen.findByRole("dialog", { name: "Clear preview feedback?" });
+      expect(dialog).toContainElement(document.activeElement as HTMLElement);
+      chord("toggle-preview");
+      await press("Escape", dialog);
+      expect(confirm.request).toBeNull();
+      expect(preview.visible).toBe(true);
+      expect(feedback.elementsFor(A)).toHaveLength(1);
+      expect(screen.queryByText(/again to clear preview feedback/)).toBeNull();
+    } finally { preview.close(); feedback.clear(A); }
   });
   it("toggles the session preview and returns to the same live tab", async () => {
     const url = "http://localhost:5173";

@@ -837,6 +837,10 @@ export interface FeedbackData {
  * itself may have written, delivered as quoted evidence, never as an instruction.
  */
 export interface FeedbackElement {
+    /**
+     * Drawing geometry and enclosed DOM targets, quoted as page evidence.
+     */
+    "annotation"?: string;
     "url"?: string;
     "selector": string;
     "html"?: string;

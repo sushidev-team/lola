@@ -10,3 +10,6 @@
 @media(prefers-reduced-motion:reduce) { .annotation-editor { animation:none; } }
 .annotation-editor label { display:block; font-size:12px; color:var(--color-ink-2); margin-bottom:8px; }
 .annotation-editor textarea { display:block; width:100%; padding:10px; margin-bottom:10px; background:var(--color-canvas); border:1px solid var(--color-edge); border-radius:6px; color:var(--color-ink); resize:vertical; font-size:13px; }
+
+[data-session-preview] { --preview-mark-color:#7c5cff; }
+.preview-lettering { display:block; box-sizing:border-box; width:max-content; max-width:18em; padding:.24em .65em; border:0; border-radius:1em; background:#110e18; color:var(--preview-mark-color); font-family:system-ui,sans-serif; font-size:16px; font-weight:750; line-height:1.25; letter-spacing:-.015em; white-space:break-spaces; overflow-wrap:anywhere; box-shadow:0 1px 3px #0003; }

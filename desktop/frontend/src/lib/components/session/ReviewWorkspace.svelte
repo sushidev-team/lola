@@ -10,7 +10,7 @@
   import { readPRReadiness } from '$lib/prreadiness';
   import { store } from '$lib/store.svelte';
   import { nav } from '$lib/nav.svelte';
-  import { feedback } from '$lib/feedback.svelte';
+  import { annotationCaption, feedback } from '$lib/feedback.svelte';
   import { feed } from '$lib/feed.svelte';
   import { ssh } from '$lib/ssh.svelte';
   import { sessionActivity } from '$lib/sessionactivity';
@@ -338,9 +338,10 @@
     {#if count}
       {#if feedback.draftsFor(sessionId).length}<p class="text-sm text-ink-2">{feedback.draftsFor(sessionId).length} code comments</p>{/if}
       {#each feedback.elementsFor(sessionId) as element,i (element)}
+        {@const textLabel = element.mark?.kind === "text"}
         <div class="flex items-start justify-between gap-2">
-          <p class="min-w-0 text-sm wrap-anywhere text-ink-2"><span class="mr-1 inline-grid size-5 place-items-center rounded-full bg-accent-fill text-xs font-semibold text-accent" aria-label={`Live comment ${i + 1}`}>{i + 1}</span>{element.note}{#if element.images?.length}<span class="ml-1 text-xs text-faint">{element.images.length} {element.images.length === 1 ? "image" : "images"}</span>{/if}</p>
-          <Button icon size="xs" variant="danger" aria-label="Remove live comment" title="Delete live comment" onclick={() => feedback.removeElement(sessionId, element)}><Icon name="trash-2" size={14}/></Button>
+          <p class="min-w-0 text-sm wrap-anywhere text-ink-2"><span class="mr-1 inline-grid size-5 place-items-center rounded-full bg-accent-fill text-xs font-semibold text-accent" aria-label={`${textLabel ? "Text label" : "Live comment"} ${i + 1}`}>{i + 1}</span>{annotationCaption(element)}{#if element.images?.length}<span class="ml-1 text-xs text-faint">{element.images.length} {element.images.length === 1 ? "image" : "images"}</span>{/if}</p>
+          <Button icon size="xs" variant="danger" aria-label={textLabel ? "Remove text label" : "Remove live comment"} title={textLabel ? "Delete text label" : "Delete live comment"} onclick={() => feedback.removeElement(sessionId, element)}><Icon name="trash-2" size={14}/></Button>
         </div>
       {/each}
       {#if notes}<details><summary><Chevron class="disclosure-chevron" />Inspect feedback draft</summary><textarea aria-label="Feedback draft" class="review-input mt-2" rows="6" value={notes} oninput={e => feedback.setNote(sessionId,e.currentTarget.value)}></textarea></details>{/if}

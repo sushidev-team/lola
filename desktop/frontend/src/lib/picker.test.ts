@@ -47,7 +47,14 @@ it('blocks pointer controls only while inspecting and anchors comments to the ha
     ] });
     expect(lookup).toHaveBeenCalledWith('#menu');
     expect(lookup).not.toHaveBeenCalledWith('#home-menu');
+    const deselects = () => post.mock.calls.filter(([m]) => m.type === 'annotation-deselect').length;
+    const beforeClick = activate.mock.calls.length;
+    press();
+    expect(deselects()).toBe(1);
+    expect(activate.mock.calls.length).toBe(beforeClick + 2);
     send({ type: 'comment-anchors', documentId: doc, anchors: [] });
+    press();
+    expect(deselects()).toBe(1);
   } finally {
     vi.restoreAllMocks();
     button.remove();
@@ -129,7 +136,7 @@ it('waits for a local sign-in form and preserves input typed before auto-login a
   }
 });
 
-it('uses plain C on the page and leaves typing, composition, copy and handled shortcuts alone', () => {
+it('uses the enabled annotation shortcuts on the page and leaves typing, composition, copy and handled shortcuts alone', () => {
   const frame = document.createElement('iframe');
   document.body.appendChild(frame);
   const child = frame.contentWindow!;
@@ -139,7 +146,7 @@ it('uses plain C on the page and leaves typing, composition, copy and handled sh
     new Function('window', 'document', script)(child, child.document);
     const documentId = post.mock.calls[0][0].documentId;
     child.dispatchEvent(new MessageEvent('message', { source: child.parent, data: {
-      target: 'lola-preview', type: 'comment-shortcut', documentId, enabled: true,
+      target: 'lola-preview', type: 'comment-shortcut', documentId, enabled: true, keys: ['c', 'p', 't', 'a', 'r'],
     }}));
     // jsdom cannot dispatch trusted keyboard events. Exercise the actual listener.
     const keydown = listen.mock.calls.find(([event]) => event === 'keydown')![1] as EventListener;
@@ -148,8 +155,12 @@ it('uses plain C on the page and leaves typing, composition, copy and handled sh
       keydown({ key: 'c', isTrusted: true, composedPath: () => [target], preventDefault, ...extra } as unknown as Event);
       return preventDefault;
     };
-    expect(press(document.body)).toHaveBeenCalledOnce();
-    expect(post).toHaveBeenCalledWith({ source: 'lola-preview', type: 'comment-shortcut', documentId }, '*');
+    for (const key of ['c','p','t','a','r']) {
+      expect(press(document.body, { key })).toHaveBeenCalledOnce();
+      expect(post).toHaveBeenCalledWith({ source:'lola-preview', type:'comment-shortcut', documentId, key }, '*');
+      expect(press(document.createElement('textarea'), { key })).not.toHaveBeenCalled();
+    }
+    expect(press(document.body, { key:'x' })).not.toHaveBeenCalled();
     for (const tag of ['input', 'textarea', 'select']) expect(press(document.createElement(tag))).not.toHaveBeenCalled();
     const editor = document.createElement('div');
     editor.contentEditable = 'true'; editor.setAttribute('contenteditable', 'true');
@@ -157,5 +168,78 @@ it('uses plain C on the page and leaves typing, composition, copy and handled sh
     for (const extra of [{ metaKey: true }, { ctrlKey: true }, { isComposing: true }, { defaultPrevented: true }, { repeat: true }]) {
       expect(press(document.body, extra)).not.toHaveBeenCalled();
     }
+  } finally { frame.remove(); vi.restoreAllMocks(); }
+});
+
+it('highlights a clicked element and reports only enclosed visible targets for a drag', () => {
+  const frame = document.createElement('iframe');
+  document.body.appendChild(frame);
+  const child = frame.contentWindow!, doc = child.document;
+  const post = vi.spyOn(child.parent, 'postMessage').mockImplementation(() => {});
+  try {
+    doc.body.innerHTML = '<button id="one">First</button><button id="two">Second</button><button id="partial">Partial</button><button id="covered">Hidden</button>';
+    const nodes = Array.from(doc.querySelectorAll('button'));
+    nodes.forEach((el, i) => {
+      vi.spyOn(el, 'getBoundingClientRect').mockReturnValue(new DOMRect(10 + i * 30, 10, 25, 20));
+    });
+    Object.defineProperty(doc, 'elementFromPoint', {value: (x: number) =>
+      nodes.find(el => el.id !== 'covered' && x >= el.getBoundingClientRect().left && x <= el.getBoundingClientRect().right) ?? doc.body});
+    new Function('window', 'document', script)(child, doc);
+    const documentId = post.mock.calls[0][0].documentId;
+    const send = (m: object) => child.dispatchEvent(new MessageEvent('message', {
+      source: child.parent, data: {target: 'lola-preview', documentId, ...m},
+    }));
+    send({type:'pick', on:true});
+    send({type:'hover-at', x:12, y:12});
+    const highlight = doc.querySelector<HTMLElement>('[data-lola-preview]')!;
+    expect(highlight.style.left).toBe('10px');
+    expect(highlight.style.width).toBe('25px');
+    send({type:'pick-at', x:12, y:12});
+    expect(post.mock.calls.map(([m]) => m).findLast(m => m.type === 'pick')).toMatchObject({
+      selector:'button#one', html: nodes[0].outerHTML,
+    });
+    expect(highlight.style.display).toBe('block');
+    const pick = (w: number) => {
+      send({type:'pick', on:true});
+      send({type:'pick-at', x:0, y:0, region:true, rect:{x:0,y:0,w,h:40}});
+      return post.mock.calls.map(([m]) => m).findLast(m => m.type === 'pick');
+    };
+    expect(pick(80)).toMatchObject({selector:'button#one', targets:['button#one', 'button#two'], html:''});
+    expect(pick(180).targets).toEqual(['button#one', 'button#two', 'button#partial']);
+  } finally { frame.remove(); vi.restoreAllMocks(); }
+});
+
+it('positions labels against the site without highlighting or collecting element contents', () => {
+  const frame = document.createElement('iframe');
+  document.body.appendChild(frame);
+  const child = frame.contentWindow!, doc = child.document;
+  const pane = doc.createElement('section');
+  pane.id = 'ledger';
+  doc.body.appendChild(pane);
+  vi.spyOn(pane, 'getBoundingClientRect').mockReturnValue(new DOMRect(15, 30, 180, 100));
+  pane.scrollTop = 40;
+  const hit = vi.fn((): Element => pane);
+  Object.defineProperty(doc, 'elementFromPoint', {value:hit});
+  Object.defineProperty(child, 'scrollX', {value:32, configurable:true});
+  Object.defineProperty(child, 'scrollY', {value:120, configurable:true});
+  const post = vi.spyOn(child.parent, 'postMessage').mockImplementation(() => {});
+  try {
+    new Function('window', 'document', script)(child, doc);
+    const documentId = post.mock.calls[0][0].documentId;
+    const send = (m: object) => child.dispatchEvent(new MessageEvent('message', {
+      source:child.parent, data:{target:'lola-preview', documentId, ...m},
+    }));
+    send({type:'pick', on:true, tool:'text'});
+    const placement = {type:'pick-at', label:true, x:25, y:50, rect:{x:25,y:50,w:80,h:30}};
+    send(placement);
+    const result = () => post.mock.calls.map(([m]) => m).findLast(m => m.type === 'pick');
+    expect(result()).toMatchObject({selector:'section#ledger', targets:[], html:'', text:'', rect:{x:15,y:-10}});
+    expect(doc.querySelector<HTMLElement>('[data-lola-preview]')?.style.display).toBe('none');
+    pane.scrollTop += 20;
+    pane.dispatchEvent(new Event('scroll'));
+    expect(post.mock.calls.map(([m]) => m).findLast(m => m.type === 'selection-bounds').rect).toEqual({x:25,y:30,w:80,h:30});
+    hit.mockReturnValue(doc.body);
+    send({...placement, editId:7});
+    expect(result()).toMatchObject({selector:':root', editId:7, targets:[], rect:{x:-32,y:-120}});
   } finally { frame.remove(); vi.restoreAllMocks(); }
 });

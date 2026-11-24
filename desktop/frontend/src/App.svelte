@@ -104,8 +104,9 @@
   // open dialog.
   function sessionAction(action: string) {
     if (preview.request) {
+      if (confirm.request) return;
       if (action === "toggle-git") {
-        if (confirm.request || sessionMenu.request) return;
+        if (sessionMenu.request) return;
         previewWindow?.hidePreview();
         if (nav.overlay === "pr-review") nav.closeOverlay();
         if (!nav.inGit) toggleGitWorkspace();
@@ -328,7 +329,7 @@
     // guarantees, and Cmd-C must keep copying while a dialog is open.
     if (e.defaultPrevented || isChord(e)) return;
     // The preview owns its keyboard, including Escape from its exit hint.
-    if (preview.request || (e.key === "Escape" && e.repeat)) return;
+    if ((preview.request && !confirm.request) || (e.key === "Escape" && e.repeat)) return;
 
     // A pending confirmation and an open overlay own Escape even while one of
     // their own fields is focused — the guarded config forms open the confirm
@@ -571,8 +572,8 @@
 {:else if nav.overlay === "bestof"}
   <BestOfOverlay />
 {/if}
-<ConfirmDialog />
 <PreviewWorkspace bind:this={previewWindow} />
+<ConfirmDialog />
 <BulkPickupDialog />
 <SandboxLoginDialog />
 <StackAppsDialog />

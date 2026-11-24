@@ -526,10 +526,18 @@ func renderFeedbackElement(e protocol.FeedbackElement) (string, error) {
 		page = " on " + clipRunes(u.String(), feedbackMaxPathRunes)
 	}
 	var b strings.Builder
-	b.WriteString("- Page element" + page + "\n")
-	b.WriteString("  selector: " + clipRunes(oneLine(sel), feedbackMaxPathRunes) + "\n")
+	if sel == ":root" && e.Annotation != "" {
+		b.WriteString("- Page annotation" + page + "\n")
+	} else {
+		b.WriteString("- Page element" + page + "\n")
+		b.WriteString("  selector: " + clipRunes(oneLine(sel), feedbackMaxPathRunes) + "\n")
+	}
 	if t := oneLine(e.Text); t != "" {
 		b.WriteString("  text: " + clipRunes(t, feedbackMaxTextRunes) + "\n")
+	}
+	if drawing := strings.TrimSpace(stripControl(e.Annotation)); drawing != "" {
+		b.WriteString("  annotation:\n")
+		b.WriteString(indent(clipRunes(drawing, 6000), "  > ") + "\n")
 	}
 	if h := strings.TrimSpace(e.HTML); h != "" {
 		lines := strings.Split(clipRunes(stripControl(h), feedbackMaxHTMLRunes), "\n")

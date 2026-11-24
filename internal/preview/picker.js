@@ -3,9 +3,12 @@
   window.__lolaPreview = true;
   var SRC = "lola-preview";
   var picking = false;
+  var elementTool = true;
   var box = null;
   var selected = null;
   var observer = null;
+  var selectionArea = null;
+  var labelChanges = null;
 
   function post(msg) {
     msg.source = SRC;
@@ -42,8 +45,7 @@
     return parts.join(" > ");
   }
 
-  function target(e) {
-    var t = e.target;
+  function pickable(t) {
     return t && t.nodeType === 1 && t !== box && t !== document.documentElement && t !== document.body ? t : null;
   }
 
@@ -59,63 +61,140 @@
     Object.assign(box.style, { display: "block", boxSizing: "border-box", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
   }
 
-  function onMove(e) { draw(target(e)); }
+  function onMove(e) { if (elementTool) draw(pickable(e.target)); }
 
   function alignSelection() {
     if (!selected) return;
-    draw(selected);
-    var r = selected.getBoundingClientRect();
+    if (!selectionArea) draw(selected);
+    var r = anchoredRect(selected, selectionArea);
     post({ type: "selection-bounds", rect: { x: r.left, y: r.top, w: r.width, h: r.height } });
   }
 
   function clearSelection() {
     selected = null;
+    selectionArea = null;
     if (observer) observer.disconnect();
     observer = null;
+    if (labelChanges) labelChanges.disconnect();
+    labelChanges = null;
     document.removeEventListener("scroll", alignSelection, true);
     window.removeEventListener("resize", alignSelection);
     if (box) box.style.display = "none";
   }
 
   function onClick(e) {
-    var el = target(e);
+    if (!elementTool) return;
+    var el = pickable(e.target);
     if (!el) return;
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
+    pick(el, null, []);
+  }
+
+  function anchorBounds(el, label) {
+    if (el === document.documentElement) {
+      return { left: -window.scrollX, top: -window.scrollY, width: innerWidth, height: innerHeight };
+    }
     var r = el.getBoundingClientRect();
+    // A label placed in a scroll pane's empty space belongs to its content.
+    if (label && (el.scrollLeft || el.scrollTop)) {
+      return new DOMRect(r.left - el.scrollLeft, r.top - el.scrollTop, r.width, r.height);
+    }
+    return r;
+  }
+
+  function anchoredRect(el, area) {
+    var r = anchorBounds(el, area && area.label);
+    if (!area) return r;
+    var left = r.left + area.x, top = r.top + area.y;
+    return { left: left, top: top, right: left + area.w, bottom: top + area.h, width: area.w, height: area.h };
+  }
+
+  // The parent draws in iframe CSS pixels. Resolve the DOM at release, while
+  // the page is still in pick mode. Only selectors and bounded visible text
+  // leave the page for a region, never the enclosing container's whole HTML.
+  function pickAt(m) {
+    if ((!picking && !m.editId) || m.documentId !== documentId || !Number.isFinite(m.x) || !Number.isFinite(m.y)) return;
+    var area = m.rect, hits = [], more = false, first = null;
+    if (area && ![area.x, area.y, area.w, area.h].every(Number.isFinite)) return;
+    if (area && m.label) {
+      // A dragged label can extend past the frame. Anchor its visible portion.
+      var hit = document.elementFromPoint(Math.max(0, Math.min(innerWidth - 1, m.x)), Math.max(0, Math.min(innerHeight - 1, m.y)));
+      var underLabel = pickable(hit) || document.documentElement;
+      if (hit === document.body && hit !== document.scrollingElement &&
+          (hit.scrollHeight > hit.clientHeight || hit.scrollWidth > hit.clientWidth)) underLabel = hit;
+      pick(underLabel, area, [], false, m.editId, true);
+      return;
+    }
+    if (area && m.page) {
+      pick(document.documentElement, area, [], false, m.editId);
+      return;
+    }
+    if (area && m.region) {
+      var nodes = document.body.getElementsByTagName("*");
+      for (var i = 0; i < nodes.length; i++) {
+        var node = nodes[i], r = node.getBoundingClientRect();
+        if (!r.width || !r.height || r.left < area.x || r.top < area.y ||
+            r.right > area.x + area.w || r.bottom > area.y + area.h) continue;
+        var at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+        if (!at || !node.contains(at)) continue;
+        if (!first) first = node;
+        if (hits.length === 16) { more = true; break; }
+        var label = (node.getAttribute("aria-label") || node.innerText || "").trim().replace(/\s+/g, " ").slice(0, 64);
+        hits.push(selector(node).slice(0, 160) + (label ? " - " + label : ""));
+      }
+    }
+    var x = m.region && area ? area.x + area.w / 2 : m.x;
+    var y = m.region && area ? area.y + area.h / 2 : m.y;
+    var el = first || document.elementFromPoint(x, y) || document.body;
+    if (el === document.documentElement) el = document.body;
+    if (!area && el === document.body) return;
+    pick(el, area, hits, more, m.editId);
+  }
+
+  function pick(el, area, targets, more, editId, label) {
+    var r = anchorBounds(el, label);
     post({
       type: "pick",
       url: location.href,
-      selector: selector(el),
+      selector: el === document.documentElement ? ":root" : selector(el),
+      ...(editId && { editId: editId }),
       tag: el.tagName.toLowerCase(),
-      html: el.outerHTML.slice(0, 6000),
-      text: (el.innerText || el.textContent || "").trim().slice(0, 400),
+      html: area ? "" : el.outerHTML.slice(0, 6000),
+      targets: targets, moreTargets: !!more, documentId: documentId,
+      text: area ? "" : (el.innerText || el.textContent || "").trim().slice(0, 400),
       rect: { x: Math.round(r.left), y: Math.round(r.top), w: Math.round(r.width), h: Math.round(r.height) }
     });
+    if (editId) return; // Moving a draft leaves the active tool alone.
     set(false);
     selected = el;
+    selectionArea = area && { label: label, x: area.x - Math.round(r.left), y: area.y - Math.round(r.top), w: area.w, h: area.h };
     document.addEventListener("scroll", alignSelection, true);
     window.addEventListener("resize", alignSelection);
     if (window.ResizeObserver) {
       observer = new ResizeObserver(alignSelection);
       observer.observe(el);
     }
+    if (label) {
+      labelChanges = new MutationObserver(alignSelection);
+      labelChanges.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
+    }
     alignSelection();
   }
 
-  function swallow(e) { if (target(e)) { e.preventDefault(); e.stopPropagation(); } }
+  function swallow(e) { if (pickable(e.target)) { e.preventDefault(); e.stopPropagation(); } }
 
-  var commentShortcut = false;
+  var annotationKeys = [];
   // Give the page first refusal on unmodified shortcuts, including its editors.
   window.addEventListener("keydown", function (e) {
     if (e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229 ||
         !e.isTrusted || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
-    if (e.key === "c" && commentShortcut && document.designMode !== "on" && !e.composedPath().some(function (el) {
+    if (annotationKeys.includes(e.key) && document.designMode !== "on" && !e.composedPath().some(function (el) {
       return el instanceof HTMLElement && (el.isContentEditable || el.matches('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="combobox"],[role="searchbox"]'));
     })) {
       e.preventDefault();
-      post({ type: "comment-shortcut", documentId: documentId });
+      post({ type: "comment-shortcut", documentId: documentId, key: e.key });
       return;
     }
     if (e.key !== "Escape") return;
@@ -161,18 +240,20 @@
         try { el = document.querySelector(anchor.selector); } catch (err) { return; }
         if (!el) return;
         targets.add(el);
-        var r = el.getBoundingClientRect();
-        if (!r.width || !r.height) return;
+        var r = anchoredRect(el, anchor.area);
+        if ((el !== document.documentElement && !el.getClientRects().length) || !r.width || !r.height) return;
         var left = Math.max(0, r.left), top = Math.max(0, r.top);
         var right = Math.min(innerWidth, r.right), bottom = Math.min(innerHeight, r.bottom);
-        for (var p = el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
+        var ownScroll = anchor.area && anchor.area.label && (el.scrollHeight > el.clientHeight || el.scrollWidth > el.clientWidth);
+        for (var p = ownScroll ? el : el.parentElement; p && p !== document.documentElement; p = p.parentElement) {
           var style = getComputedStyle(p);
           if (style.overflowX === "visible" && style.overflowY === "visible") continue;
           var clip = p.getBoundingClientRect();
           if (style.overflowX !== "visible") { left = Math.max(left, clip.left); right = Math.min(right, clip.right); }
           if (style.overflowY !== "visible") { top = Math.max(top, clip.top); bottom = Math.min(bottom, clip.bottom); }
         }
-        if (right > left && bottom > top) rects.push({ number: anchor.number, x: left, y: top, w: right-left, h: bottom-top });
+        if (right > left && bottom > top) rects.push({ number: anchor.number, x: left, y: top, w: right-left, h: bottom-top,
+          ...(anchor.area && { originX: r.left, originY: r.top }) });
       });
       observed.forEach(function (el) { if (!targets.has(el)) sizes.unobserve(el); });
       targets.forEach(function (el) { if (!observed.has(el)) sizes.observe(el); });
@@ -181,6 +262,9 @@
       if (signature !== previous) post({ type: "comment-bounds", revision: message.revision, rects: rects });
       previous = signature;
     }
+    // Pointer events inside this frame do not bubble to the desktop overlay.
+    function deselect() { post({ type: "annotation-deselect", documentId: documentId }); }
+    document.addEventListener("pointerdown", deselect, true);
     var changes = new MutationObserver(schedule);
     changes.observe(document.documentElement, { subtree: true, childList: true, attributes: true, characterData: true });
     document.addEventListener("scroll", schedule, true);
@@ -191,6 +275,7 @@
     measure();
     stopComments = function () {
       changes.disconnect(); sizes.disconnect(); cancelAnimationFrame(pending);
+      document.removeEventListener("pointerdown", deselect, true);
       document.removeEventListener("scroll", schedule, true);
       document.removeEventListener("load", schedule, true);
       window.removeEventListener("resize", schedule);
@@ -417,7 +502,9 @@
       };
       port.postMessage({ ready:true });
     }
-    if (e.data.type === "comment-shortcut" && e.data.documentId === documentId) commentShortcut = e.data.enabled === true;
+    if (e.data.type === "comment-shortcut" && e.data.documentId === documentId) {
+      annotationKeys = e.data.enabled === true ? (Array.isArray(e.data.keys) ? e.data.keys : ["c"]) : [];
+    }
     if (e.data.type === "watch-login" && e.data.documentId === documentId) watchLogin(e.data.on);
     if (e.data.type === "test-login" && e.data.documentId === documentId) {
       var result = "unavailable";
@@ -432,7 +519,12 @@
       window.navigation.back();
     }
     if (e.data.type === "comment-anchors" && e.data.documentId === documentId) watchComments(e.data);
-    if (e.data.type === "pick") { if (e.data.on) cancelDebugPick(); clearSelection(); set(!!e.data.on); }
+    if (e.data.type === "pick-at") pickAt(e.data);
+    if (e.data.type === "hover-at" && picking && e.data.documentId === documentId) {
+      var hovered = document.elementFromPoint(e.data.x, e.data.y);
+      draw(pickable(hovered));
+    }
+    if (e.data.type === "pick") { if (e.data.on) cancelDebugPick(); elementTool = !e.data.tool || e.data.tool === "comment"; clearSelection(); set(!!e.data.on); }
     if (e.data.type === "check-session") {
       var check = e.data, target;
       try { target = new URL(check.path, location.origin); } catch (err) { return; }

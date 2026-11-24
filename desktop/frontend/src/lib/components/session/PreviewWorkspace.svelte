@@ -295,7 +295,7 @@
     }
   }
   function onModalKey(e: KeyboardEvent) {
-    if (!editing && !(compact && expanded) && !(e.target instanceof Element && e.target.closest(".tools")) && page && "commentKeyShortcut" in page) page.commentKeyShortcut(e);
+    if (!editing && !(compact && expanded) && !(e.target instanceof Element && e.target.closest(".tools")) && page && "annotationKeyShortcut" in page) page.annotationKeyShortcut(e);
     if (e.key === "Escape" && compact && expanded) {
       e.preventDefault();
       closeSidebar();

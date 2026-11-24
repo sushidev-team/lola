@@ -10,6 +10,7 @@ import { SvelteMap } from "svelte/reactivity";
 import { DaemonService } from "@bindings/desktop";
 import type { FeedbackComment, FeedbackElement } from "@bindings/internal/protocol";
 import { store } from "./store.svelte";
+import { describeMark, type PreviewMark } from "./previewmark";
 import type { Side } from "./diff";
 
 export type Draft = {
@@ -25,11 +26,31 @@ export type Draft = {
 
 const KEY = "lola.diff.drafts";
 
-export type ElementDraft = FeedbackElement & { reviewKey?: string; images?: string[] };
+export type ElementDraft = FeedbackElement & { reviewKey?: string; images?: string[]; mark?: PreviewMark; targets?: string[]; moreTargets?: boolean };
+
+export function annotationCaption(element: ElementDraft): string {
+  if (element.note || !element.mark) return element.note;
+  if (element.mark.kind === "text") return element.mark.label || "Text label";
+  return { area: "Rectangle", arrow: "Arrow", pen: "Freehand drawing" }[element.mark.kind];
+}
 
 // Conversation and the agent both recognize the session-local image paths in
 // the message. Keep them separate from editable prose until the note is sent.
-export function elementForAgent({ reviewKey, images, ...element }: ElementDraft): FeedbackElement {
+export function elementForAgent({ reviewKey, images, mark, targets, moreTargets, ...element }: ElementDraft): FeedbackElement {
+  if (mark) {
+    element.annotation = describeMark(mark, element.selector);
+    if (mark.kind === "text") {
+      if (element.selector !== ":root") element.annotation += "\nPosition anchor: " + element.selector;
+      if (mark.label) element.annotation += "\nLabel: " + mark.label;
+      // The selector positions the lettering. The feedback itself is a page annotation.
+      element.selector = ":root";
+    }
+    if (targets?.length) element.annotation += "\nEnclosed elements:\n" + targets.join("\n");
+    if (moreTargets) element.annotation += "\nAdditional elements omitted.";
+  }
+  if (!element.note && mark && !images?.length) {
+    return { ...element, note: annotationCaption({ ...element, mark }) };
+  }
   if (!images?.length) return element;
   const note = [element.note, ...images].filter(Boolean).join("\n");
   // renderFeedbackElement clips at feedbackMaxBodyRunes. Never truncate a path.
@@ -62,7 +83,11 @@ class Feedback {
     for (const [id, v] of Object.entries(load())) {
       if (Array.isArray(v?.drafts) && v.drafts.length) this.drafts.set(id, v.drafts);
       if (typeof v?.note === "string" && v.note) this.notes.set(id, v.note);
-      if (Array.isArray(v?.elements) && v.elements.length) this.elements.set(id, v.elements);
+      if (Array.isArray(v?.elements) && v.elements.length) {
+        // Early preview drafts stored the lettering in the comment field.
+        this.elements.set(id, v.elements.map(e => e.mark?.kind === "text" && e.mark.label === undefined
+          ? { ...e, mark: { ...e.mark, label: e.note }, note: "" } : e));
+      }
     }
   }
 
@@ -100,7 +125,7 @@ class Feedback {
       this.save();
       return;
     }
-    if (elements.length >= 10) throw new Error("Send or remove a live comment before adding another (10 per batch).");
+    if (elements.length >= 10) throw new Error("Send or remove an annotation before adding another (10 per batch).");
     this.elements.set(id, [...elements, element]);
     this.save();
   }
@@ -128,6 +153,11 @@ class Feedback {
     this.save();
   }
 
+  clearElements(id: string) {
+    this.elements.delete(id);
+    this.save();
+  }
+
   clear(id: string) {
     this.drafts.delete(id);
     this.elements.delete(id);
@@ -137,9 +167,10 @@ class Feedback {
 
   /** Ship the batch. Cleared only once the daemon has ACCEPTED it (delivered or
    * queued on its side) — a refused or failed send keeps every draft. */
-  async send(id: string): Promise<boolean> {
-    if (this.isSending(id) || this.count(id) === 0) return false;
-    const comments: FeedbackComment[] = this.draftsFor(id).map((d) => ({
+  async send(id: string, previewElements?: ElementDraft[]): Promise<boolean> {
+    if (this.isSending(id) || (previewElements?.length ?? this.count(id)) === 0) return false;
+    const lineDrafts = previewElements ? [] : this.draftsFor(id);
+    const comments: FeedbackComment[] = lineDrafts.map((d) => ({
       path: d.path,
       line: d.line,
       endLine: d.endLine > d.line ? d.endLine : 0,
@@ -150,9 +181,9 @@ class Feedback {
     // The composer stays usable while the request travels, so remember exactly
     // what went out: only that is cleared on success. A comment added, or a
     // note edited, during the request was never sent and must survive it.
-    const sentKeys = new Set(this.draftsFor(id).map((d) => d.key));
-    const sentNote = this.noteFor(id);
-    const elements = this.elementsFor(id);
+    const sentKeys = new Set(lineDrafts.map((d) => d.key));
+    const sentNote = previewElements ? "" : this.noteFor(id);
+    const elements = previewElements ?? this.elementsFor(id);
     this.sending.set(id, true);
     try {
       const r = await DaemonService.SendFeedback({ session: id, comments, note: sentNote, ...(elements.length ? { elements: elements.map(elementForAgent) } : {}) });
