@@ -629,7 +629,9 @@
 
       <div bind:this={stage} class="row-start-2 relative min-h-0 min-w-0">
         {#if active && loadingPage && !error}<PreviewLoadBar />{/if}
-        <div class="absolute inset-0 grid place-items-center overflow-auto bg-canvas grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]">
+        <!-- The iframe is capped to the stage. Keep scrolling inside the page so
+             WebKit has no outer scroll offset to apply when targeting a click. -->
+        <div class="absolute inset-0 grid place-items-center bg-canvas grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] {src && !error ? 'overflow-clip' : 'overflow-auto'}">
           {#if error}
             <p class="text-sm text-bad" role="alert">{error} <Button size="xs" onclick={() => load = { route: load.route }}>Retry</Button></p>
           {:else if src}
