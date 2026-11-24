@@ -192,8 +192,11 @@
   <div class="subbar"><span class="font-mono" aria-label="Page viewport">{dimensions ? dimensions + " px" : "Connecting…"}</span>
     {#if panel === "Console"}<Button size="xs" disabled={!lines.length} onclick={() => run({op:"clear"})}>Clear</Button>
     {:else}
+      <!-- WebKit focuses the enclosing dialog on mouse-down. Keep focus here
+           until the click runs, or dismissMenu removes the item before it toggles. -->
       <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="options" bind:this={menuBox} onkeydown={menuKey}>
+      <div class="options" bind:this={menuBox} onkeydown={menuKey}
+        onmousedown={e => { if (e.button === 0) e.preventDefault(); }}>
         <Button icon size="xs" aria-label="Elements options" title="Elements options" aria-haspopup="menu" aria-expanded={menu}
           onclick={() => menu ? closeMenu() : openMenu()}><Icon name="ellipsis-vertical" size={15}/></Button>
         {#if menu}<div class="options-menu" role="menu" aria-label="Elements options">
@@ -223,7 +226,6 @@
           <button type="button" role="treeitem" aria-level={node.depth + 1} aria-selected={node.selected}
             aria-expanded={node.count ? node.expanded : undefined} tabindex={node.selected || (!i && !tree.some(n => n.selected)) ? 0 : -1}
             class="tree-row" class:chosen={node.selected} style:--depth={node.depth}
-            title={node.name + node.attrs.map(([k,v]) => ' ' + k + '="' + v + '"').join('')}
             onkeydown={e => treeKey(e, node, i)} onclick={e => treeAction(node, e.target instanceof Element && !!e.target.closest('[data-branch]'))}>
             <span class="guides"></span>
             {#if node.offset !== undefined}<span class="text-faint">… {node.name}</span>

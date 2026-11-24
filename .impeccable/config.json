@@ -47,6 +47,15 @@
         ],
         "createdAt": "2026-11-22T09:26:53.089Z",
         "reason": "Codex triage: the existing callout rail identifies severity using the tone map and pairs with an accessible severity label."
+      },
+      {
+        "rule": "broken-image",
+        "value": "*",
+        "files": [
+          "desktop/frontend/src/lib/components/session/PreviewDeveloperTools.test.ts"
+        ],
+        "createdAt": "2026-11-24T19:44:11.291Z",
+        "reason": "The existing DOM inspector fixture tests the serialization of an HTML void element and its expected tree row."
       }
     ]
   }

@@ -8,6 +8,32 @@ const { readFileSync } = await import(/* @vite-ignore */ nodeFs);
 const root = (globalThis as unknown as { process: { cwd(): string } }).process.cwd();
 const source = readFileSync(root + "/../../internal/preview/debug.js", "utf8");
 
+it("activates Wrap DOM lines with a mouse inside the focusable preview dialog", async () => {
+  const dialog = document.createElement("div");
+  dialog.tabIndex = -1;
+  document.body.appendChild(dialog);
+  const mounted = render(PreviewDeveloperTools, { target: dialog, props: { id: 1, external: false, close: vi.fn() } });
+  try {
+    await fireEvent.click(screen.getByRole("button", { name: "Elements" }));
+    const tree = screen.getByRole("tree");
+    const options = screen.getByRole("button", { name: "Elements options" });
+    for (const enabled of [true, false]) {
+      await fireEvent.click(options);
+      const item = screen.getByRole("menuitemcheckbox", { name: "Wrap DOM lines" });
+      expect(item).toHaveAttribute("aria-checked", String(!enabled));
+      // Model WebKit's default mouse focus before the click is dispatched.
+      if (await fireEvent.mouseDown(item)) dialog.focus();
+      await fireEvent.click(item);
+      expect(tree.classList.contains("wrap")).toBe(enabled);
+      expect(options).toHaveFocus();
+    }
+  } finally {
+    mounted.unmount();
+    dialog.remove();
+    localStorage.removeItem("lola.preview.wrapDOM");
+  }
+});
+
 it("closes visible branches at their depth and keeps end tags out of element navigation", async () => {
   const frame = document.createElement("iframe");
   document.body.appendChild(frame);
