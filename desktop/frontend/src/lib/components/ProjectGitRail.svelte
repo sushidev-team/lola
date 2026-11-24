@@ -110,6 +110,8 @@
   .section-header { position:relative; min-width:0; }
   .section-controls { position:absolute; right:32px; top:5px; }
   .repo-section :global(.section-heading) { height:34px; min-width:0; gap:8px; padding:6px 12px; border-block:1px solid var(--color-edge); border-radius:0; background:var(--color-panel); color:var(--color-ink); font-size:13px; font-weight:600; }
+  .repo-section:first-child :global(.section-heading) { border-block-start:0; }
+  .repo-section.collapsed :global(.section-heading) { border-block-end:0; }
   .repo-section :global(.section-heading:hover) { background:var(--color-sel); }
   .repo-section :global(.section-heading:focus-visible) { outline:2px solid var(--color-accent); outline-offset:-2px; }
   .repo-section :global(.section-heading > svg:first-child) { color:var(--color-ink-2); }
