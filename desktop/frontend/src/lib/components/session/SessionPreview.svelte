@@ -23,6 +23,7 @@
   import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, previewIcon, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
   import Button from "../Button.svelte";
   import TestLogins from "./TestLogins.svelte";
+  import PreviewLoadBar from "./PreviewLoadBar.svelte";
   import Icon from "../Icon.svelte";
 
   // The canvas keys this instance by immutable package and page. A workspace
@@ -33,6 +34,7 @@
 
   let frame = $state<HTMLIFrameElement | null>(null);
   let src = $state("");
+  let loadingPage = $state(false);
   const frameOrigin = $derived(src ? new URL(src).origin : "");
   let error = $state("");
   let viewport = $state<ViewportId>(untrack(() =>
@@ -234,6 +236,7 @@
   $effect(() => {
     const request = req;
     const route = load.route;
+    loadingPage = !!request;
     if (tab) tab.canGoBackInFrame = false;
     verifiedPath = "";
     documentId = "";
@@ -314,6 +317,7 @@
   }
 
   function frameLoaded() {
+    loadingPage = false;
     pendingLoginDoc = "";
     pickerReady = false;
     picking = false;
@@ -411,6 +415,9 @@
       // Only the framed page, and only a well-formed pick, ever reaches the form.
       if (!frame || e.source !== frame.contentWindow || !src || e.origin !== frameOrigin) return;
       const d = e.data as { source?: string; type?: string; id?: number; documentId?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown; i?: unknown; failed?: { index?: unknown; step?: unknown; why?: unknown } | null } | null;
+      if (d?.source === PICKER_SOURCE && d.type === "page-loading" && documentId && d.documentId === documentId && typeof e.data.loading === "boolean") {
+        loadingPage = e.data.loading;
+      }
       if (active && tab && pickerReady && d?.source === PICKER_SOURCE && d.documentId === documentId) {
         if (d.type === "new-tab" && typeof d.url === "string") {
           let target: URL;
@@ -621,6 +628,7 @@
       {/if}
 
       <div bind:this={stage} class="row-start-2 relative min-h-0 min-w-0">
+        {#if active && loadingPage && !error}<PreviewLoadBar />{/if}
         <div class="absolute inset-0 grid place-items-center overflow-auto bg-canvas grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)]">
           {#if error}
             <p class="text-sm text-bad" role="alert">{error} <Button size="xs" onclick={() => load = { route: load.route }}>Retry</Button></p>

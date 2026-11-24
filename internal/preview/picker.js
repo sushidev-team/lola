@@ -199,6 +199,33 @@
     post({ type: "ready", picking: picking, documentId: documentId, url: location.href, title: document.title,
       favicon: favicon(), kind: kind, canGoBack: !!(window.navigation && window.navigation.canGoBack) });
   }
+  // A cross-origin parent sees the iframe load finish, but cannot see it start.
+  function pageLoading(loading) { post({ type: "page-loading", documentId: documentId, loading: loading }); }
+  if (window.navigation) {
+    var pendingNavigation;
+    function finishNavigation() {
+      if (!pendingNavigation) return;
+      pendingNavigation = null;
+      pageLoading(false);
+    }
+    window.navigation.addEventListener("navigate", function (event) {
+      if (event.destination.sameDocument || event.downloadRequest != null) return;
+      queueMicrotask(function () {
+        if (event.defaultPrevented || event.signal.aborted) return;
+        pendingNavigation = event.signal;
+        pageLoading(true);
+        event.signal.addEventListener("abort", function () {
+          if (pendingNavigation === event.signal) finishNavigation();
+        }, { once: true });
+      });
+    });
+    window.navigation.addEventListener("navigatesuccess", finishNavigation);
+    window.navigation.addEventListener("navigateerror", finishNavigation);
+  }
+  window.addEventListener("pagehide", function () { pageLoading(true); });
+  window.addEventListener("pageshow", function (event) {
+    if (event.persisted) { announce("traverse"); pageLoading(false); }
+  });
   // Track client-side navigation as well as whole-document loads. The review
   // canvas only needs ready; install these listeners for browser tabs on demand.
   var watchingLocation = false;
@@ -248,7 +275,6 @@
       post({ type: "location", documentId: documentId, url: lastURL, title: lastTitle, favicon: icon, kind: kind, canGoBack: back });
     }
     if (document.head) new MutationObserver(function () { changed(); }).observe(document.head, { subtree: true, childList: true, characterData: true, attributeFilter: ["href", "rel"] });
-    window.addEventListener("pageshow", function (e) { if (e.persisted) announce("traverse"); });
     if (window.navigation) window.navigation.addEventListener("currententrychange", function (e) { changed(e.navigationType); });
     else {
       ["pushState", "replaceState"].forEach(function (name) {

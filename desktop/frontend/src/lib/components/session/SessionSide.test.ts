@@ -374,6 +374,37 @@ it('waits for the picker and preserves edits made during a feedback send', async
   } finally { preview.close(); refresh.mockRestore(); }
 });
 
+it('shows dev page loading through proxy startup, document navigation and a failed reload', async () => {
+  const url = 'http://shop.test', origin = 'http://preview.localhost:5555';
+  const sessionId = freshSession({ devUrls: [url] });
+  let resolveOpen!: (value: string) => void;
+  const open = vi.mocked(PreviewService.Open).mockImplementationOnce(() => new Promise<string>(resolve => {
+    resolveOpen = resolve;
+  }) as ReturnType<typeof PreviewService.Open>);
+  const view = render(SessionPreview, { inline: { sessionId, url } });
+  const bar = () => screen.queryByRole('progressbar', { name: 'Loading page' });
+  expect(bar()).toBeVisible();
+  expect(bar()).not.toHaveAttribute('aria-valuenow');
+  resolveOpen(origin + '/');
+  const frame = await screen.findByTitle('Preview of shop.test') as HTMLIFrameElement;
+  await fireEvent.load(frame);
+  expect(bar()).toBeNull();
+  const say = (data: object) => fireEvent(window, new MessageEvent('message', {
+    origin, source: frame.contentWindow, data: { source: 'lola-preview', documentId: 'page', ...data },
+  }));
+  await say({ type: 'ready', url: origin + '/' });
+  await say({ type: 'page-loading', loading: true, documentId: 'stale' });
+  expect(bar()).toBeNull();
+  await say({ type: 'page-loading', loading: true });
+  expect(bar()).toBeVisible();
+  await fireEvent.load(frame);
+  expect(bar()).toBeNull();
+  open.mockRejectedValueOnce(new Error('server offline'));
+  view.component.reloadPage();
+  await screen.findByRole('alert');
+  expect(bar()).toBeNull();
+});
+
 it('removes a parked preview when its stack stops advertising the origin', async () => {
   const url = 'http://shop.test', id = freshSession({ apps: [{ name: 'shop', devUrls: [url] }] });
   vi.mocked(PreviewService.Open).mockResolvedValue('http://preview.localhost:5555/settings');
@@ -479,6 +510,18 @@ it('opens dev and external new-tab links in Preview, keeping the source page liv
     expect(tab.request.external).toBe(true);
     expect(postMessage).toHaveBeenCalledWith({ action: 'load', id: tab.id, url: docs });
     expect(open).toHaveBeenCalledTimes(2);
+    const progress = (loading: boolean, fraction: number) => fireEvent(window, new CustomEvent('lola-external-preview', {
+      detail: { id: tab.id, type: 'progress', loading, fraction },
+    }));
+    const bar = () => screen.queryByRole('progressbar', { name: 'Loading page' });
+    await progress(true, 0.42);
+    expect(bar()).toHaveAttribute('aria-valuenow', '42');
+    preview.select(0);
+    await waitFor(() => expect(screen.queryByRole('progressbar', { name: 'Loading page', value: { now: 42 } })).toBeNull());
+    preview.select(preview.tabs.indexOf(tab));
+    await waitFor(() => expect(bar()).toHaveAttribute('aria-valuenow', '42'));
+    await progress(false, 1);
+    expect(bar()).toBeNull();
     window.dispatchEvent(new CustomEvent('lola-external-preview', { detail: {
       id: tab.id, type: 'location', url: docs + '/second', title: 'Second page', back: true,
     } }));

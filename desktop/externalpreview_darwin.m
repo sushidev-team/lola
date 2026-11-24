@@ -9,6 +9,10 @@ static BOOL webURL(NSURL *url) {
         ([url.scheme.lowercaseString isEqual:@"https"] || [url.scheme.lowercaseString isEqual:@"http"]);
 }
 
+static NSArray<NSString *> *observedPageKeys(void) {
+    return @[@"URL", @"title", @"canGoBack", @"loading", @"estimatedProgress"];
+}
+
 @interface LolaExternalPreview : NSObject <WKScriptMessageHandler, WKUIDelegate, WKNavigationDelegate>
 @property(nonatomic, weak) WKWebView *host;
 @property(nonatomic, strong) NSMutableDictionary<NSNumber *, WKWebView *> *tabs;
@@ -26,6 +30,10 @@ static BOOL webURL(NSURL *url) {
 }
 
 - (void)observeValueForKeyPath:(NSString *)key ofObject:(WKWebView *)page change:(NSDictionary *)change context:(void *)context {
+    if ([key isEqual:@"loading"] || [key isEqual:@"estimatedProgress"]) {
+        [self send:page data:@{@"type":@"progress", @"loading":@(page.isLoading), @"fraction":@(page.estimatedProgress)}];
+        return;
+    }
     [self send:page data:@{@"type":@"location", @"url":page.URL.absoluteString ?: @"",
                             @"title":page.title ?: @"", @"back":@(page.canGoBack)}];
 }
@@ -67,7 +75,7 @@ static BOOL webURL(NSURL *url) {
 
 - (void)removeTab:(NSNumber *)tab {
     WKWebView *page = self.tabs[tab];
-    for (NSString *key in @[@"URL", @"title", @"canGoBack"]) [page removeObserver:self forKeyPath:key];
+    for (NSString *key in observedPageKeys()) [page removeObserver:self forKeyPath:key];
     [page stopLoading];
     [page removeFromSuperview];
     [self.tabs removeObjectForKey:tab];
@@ -98,7 +106,7 @@ static BOOL webURL(NSURL *url) {
             page.navigationDelegate = self;
             self.tabs[tab] = page;
             [self.host addSubview:page];
-            for (NSString *key in @[@"URL", @"title", @"canGoBack"]) [page addObserver:self forKeyPath:key options:0 context:NULL];
+            for (NSString *key in observedPageKeys()) [page addObserver:self forKeyPath:key options:0 context:NULL];
         }
         [page loadRequest:[NSURLRequest requestWithURL:url]];
     } else if ([action isEqual:@"place"] && page) {
