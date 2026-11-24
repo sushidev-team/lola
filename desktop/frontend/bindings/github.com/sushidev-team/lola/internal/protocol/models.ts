@@ -1587,6 +1587,16 @@ export interface LinearAgentStatus {
      * the doorbell's listen address, "" when off
      */
     "webhook"?: string;
+
+    /**
+     * OnlyMine is [linear_agent].only_when_assigned_to_me. HubClaim is the effective
+     * arbitration mode ("auto" | "required" | "off"; "off" also when no hub is
+     * joined). Waiting counts pending sessions this daemon left to someone else
+     * (not the owner, or the hub gave the claim to another daemon) at the last poll.
+     */
+    "onlyMine"?: boolean;
+    "hubClaim"?: string;
+    "waiting"?: number;
 }
 
 /**
