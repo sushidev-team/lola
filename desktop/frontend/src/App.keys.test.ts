@@ -337,6 +337,33 @@ describe("in a session", () => {
       preview.close();
     }
   });
+  it("closes Preview and shows Git even when the address editor or Git itself was open", async () => {
+    const url = "http://localhost:5173";
+    await mount([plain(A, { devActive: true, devUrls: [url] })]);
+    store.projects = [{ name: "p", path: "/repo" }] as typeof store.projects;
+    nav.openSession(A);
+    try {
+      chord("toggle-preview");
+      chord("ssh-talk");
+      await screen.findByRole("textbox", { name: "Preview address" });
+      const tab = preview.tabs[preview.active].id;
+      chord("toggle-git");
+      expect(screen.queryByRole("dialog", { name: "Preview" })).toBeNull();
+      expect(screen.queryByRole("textbox", { name: "Preview address" })).toBeNull();
+      expect(nav.inGit).toBe(true);
+      expect(nav.project).toBe("p");
+
+      preview.visible = true;
+      chord("toggle-git");
+      expect(preview.visible).toBe(false);
+      expect(nav.inGit).toBe(true);
+      expect(preview.tabs[preview.active].id).toBe(tab);
+      chord("toggle-git");
+      expect(nav.focusedTerm).toBe(A);
+    } finally {
+      preview.close();
+    }
+  });
   it("routes native menu chords to the visible Preview, including the last tab", async () => {
     const root = "http://localhost:5173";
     await mount([plain(A, { devUrls: [root] })]);

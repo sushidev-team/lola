@@ -152,7 +152,7 @@
     if (preview.tabs[next].visited) preview.select(next);
     focusTab(next);
   }
-  function hidePreview() {
+  export function hidePreview() {
     addressTab = null;
     preview.visible = false;
   }

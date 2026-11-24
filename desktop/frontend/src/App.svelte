@@ -104,6 +104,13 @@
   // open dialog.
   function sessionAction(action: string) {
     if (preview.request) {
+      if (action === "toggle-git") {
+        if (confirm.request || sessionMenu.request) return;
+        previewWindow?.hidePreview();
+        if (nav.overlay === "pr-review") nav.closeOverlay();
+        if (!nav.inGit) toggleGitWorkspace();
+        return;
+      }
       previewWindow?.menuAction(action);
       return;
     }
