@@ -1,5 +1,36 @@
 # Changelog
 
+## [0.18.0](https://github.com/sushidev-team/lola/compare/v0.17.1...v0.18.0) (2026-11-24)
+
+
+### Features
+
+* **conversation:** link replies to the original message ([3c4e27e](https://github.com/sushidev-team/lola/commit/3c4e27eafbc01bfa6c0a4f8182377419fd951445))
+* **desktop:** add bulk project import from a parent folder ([aca8faa](https://github.com/sushidev-team/lola/commit/aca8faa9233f9694606d0a0891a683b4b19b27b7))
+* **desktop:** add preview tab navigation and favicons ([38dfee1](https://github.com/sushidev-team/lola/commit/38dfee1881b02a12538b770be2a10b714122ce76))
+* **desktop:** add project group actions and highlight removals ([8154c04](https://github.com/sushidev-team/lola/commit/8154c04d8705b7e509989b7cf50fb187d760f09e))
+* **desktop:** open Git directly from Preview with Cmd+Shift+G ([e42dd4f](https://github.com/sushidev-team/lola/commit/e42dd4f0b3a68334bc7fb049e4d237f5ad47988c))
+* **desktop:** prioritize the session overview and open changes in Review ([56eb3d4](https://github.com/sushidev-team/lola/commit/56eb3d40bcb000a264dc763d647f4e38ca8be927))
+* **desktop:** show loading progress in preview webviews ([09e5314](https://github.com/sushidev-team/lola/commit/09e53145a516cc70c417f762b47f1fd00112aa85))
+* **desktop:** toggle session preview with Cmd+Shift+P ([8ab5574](https://github.com/sushidev-team/lola/commit/8ab557410ade33e6b08817014134a22f76dc654d))
+* **preview:** add saved test logins and optional auto-login ([ad73f8c](https://github.com/sushidev-team/lola/commit/ad73f8cd7fb76f038f64749a2dbf5d6d61fc97c0))
+* **preview:** open any web address and preserve Statamic sidebar sessions ([49000d0](https://github.com/sushidev-team/lola/commit/49000d0c058eddcfcc50295ab181754bf4b68541))
+
+
+### Bug Fixes
+
+* **daemon:** send the task reminder once per session ([bbe21f8](https://github.com/sushidev-team/lola/commit/bbe21f8bc351e33dc3c145aad84559069cc6bea7))
+* **desktop:** keep dev preview tabs open in the background ([c20f6bd](https://github.com/sushidev-team/lola/commit/c20f6bd60ccf56164eae26d154949a0d37dce076))
+* **desktop:** prevent WebKit click offset in capped preview stage ([90ffcaf](https://github.com/sushidev-team/lola/commit/90ffcafe75b7475d5463076cff2e0bdc78f419ef))
+* **desktop:** remove doubled Git sidebar borders ([c887a70](https://github.com/sushidev-team/lola/commit/c887a7079ca24e3606f0f80823bab569eccd2741))
+* **desktop:** retry saved logins after preview redirects ([55c4a3a](https://github.com/sushidev-team/lola/commit/55c4a3a815bf4254acb2dbb3b3a238b15ac2f135))
+* **desktop:** show and refresh worktree changes in the Git inspector ([61801a4](https://github.com/sushidev-team/lola/commit/61801a47cd664ec4413a0ca7662bfccff6684b22))
+* lease ports and enable Start dev in local checkout sessions ([438450f](https://github.com/sushidev-team/lola/commit/438450fb26aa7eb25bf961646cd10368491b0f0c))
+* **mobile:** handle desktop project folder methods ([379f36f](https://github.com/sushidev-team/lola/commit/379f36f75cd977e263c2e73402d548251e435774))
+* preserve per-repository PRs across daemon restarts ([30de219](https://github.com/sushidev-team/lola/commit/30de2198f0209e748c5af05eb0d443fdc47d7f4c))
+* **preview:** keep Statamic control-panel navigation on the preview origin ([ee26efc](https://github.com/sushidev-team/lola/commit/ee26efc004c07785154580f06b68d1759c8ba383))
+* **projectgit:** preserve local changes during branch merges ([5be6f11](https://github.com/sushidev-team/lola/commit/5be6f110a9d9d20d62f44575bfaec19df1677ffa))
+
 ## [0.17.1](https://github.com/sushidev-team/lola/compare/v0.17.0...v0.17.1) (2026-11-22)
 
 
