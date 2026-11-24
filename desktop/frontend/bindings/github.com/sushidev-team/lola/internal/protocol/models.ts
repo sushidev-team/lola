@@ -3465,6 +3465,11 @@ export interface SessionInfo {
     "age": string;
 
     /**
+     * AttachmentRoot overrides Worktree for agents with a separate image directory.
+     */
+    "attachmentRoot"?: string;
+
+    /**
      * raw session age origin for live client formatting
      */
     "firstSeen"?: string;

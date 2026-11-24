@@ -744,7 +744,7 @@ object passed as `args`, matching `sshCall`). Image methods (`services/talkimage
   `present:false` rejects `"No image to paste."`; else `uploadImage()`.
 - `AttachImageFile(worktree, src)` — PLATFORM `MAC_ONLY`: `src` is a Mac path.
 - `ReadAttachmentImage(worktree, path)` — FWD `attachmentImage` (read, A14):
-  resolve `session` as the live `SessionInfo` whose `worktree` equals
+  resolve `session` as the live `SessionInfo` whose `attachmentRoot || worktree` equals
   `worktree`, else the `endedSessions` row whose `keptWorktree` equals it; none
   → reject `"Open on your Mac to view."`. Fetch chunks sequentially from
   `offset 0` by `ATTACH_PART_BYTES` until `eof`, check `size ≤ 20 MiB`, return

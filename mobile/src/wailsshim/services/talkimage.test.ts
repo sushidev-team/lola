@@ -119,6 +119,16 @@ describe("AttachClipboardImage", () => {
     await expect(AttachClipboardImage("/w/s1")).rejects.toThrow("image too large for this session");
   });
 
+  it("routes a paste to the selected tab when two sessions share a checkout", async () => {
+    clip.native.readClipboardImage.mockResolvedValue({ present: true, mime: "image/png", data: b64(bytesOf(10)) });
+    request.mockResolvedValueOnce({ sessions: [
+      { id: "owner", worktree: "/checkout" },
+      { id: "tab", worktree: "/checkout", attachmentRoot: "/private/tab" },
+    ] }).mockResolvedValueOnce({ received: 10, path: "/private/tab/.lola/images/a.png" });
+    await AttachClipboardImage("/private/tab");
+    expect(request.mock.calls[1][2]).toMatchObject({ args: { session: "tab" } });
+  });
+
   it("says to open the Mac when no session owns the worktree", async () => {
     clip.native.readClipboardImage.mockResolvedValue({ present: true, mime: "image/png", data: b64(bytesOf(10)) });
     daemon(() => ({}));

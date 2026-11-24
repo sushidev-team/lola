@@ -680,7 +680,7 @@ describe('image preparation feedback', () => {
   const pasteImage = () => fireEvent.paste(field(), { clipboardData: { getData: () => '' } });
 
   it('reserves the image immediately, allows typing, and blocks Send until it is ready', async () => {
-    const id = freshSession();
+    const id = freshSession({ worktree: '/checkout', attachmentRoot: '/local-sessions/one' });
     let resolve!: (value: unknown) => void;
     talkSvc.AttachClipboardImage.mockImplementationOnce(() => new Promise(r => { resolve = r; }));
     shown(id);
@@ -688,6 +688,7 @@ describe('image preparation feedback', () => {
     await type('Look here: ');
     field().setSelectionRange(11, 11);
     await pasteImage();
+    expect(talkSvc.AttachClipboardImage).toHaveBeenCalledWith('/local-sessions/one');
     expect(screen.getByRole('status', { name: 'Preparing image 1' })).toBeInTheDocument();
     expect(field().value).toBe(`Look here: ${attachmentToken(1)}`);
     expect(document.querySelector('[data-attachment="image"]')).toHaveAttribute('aria-busy', 'true');

@@ -22,3 +22,13 @@ it('shows an unavailable original without trapping navigation', async () => {
   expect(await screen.findByRole('status')).toHaveTextContent('Original image unavailable');
   expect(screen.getByRole('button', { name: 'Next image' })).toBeDisabled();
 });
+
+it('reads both private attachments and earlier worktree images in the same message', async () => {
+  const paths = ['/private/tab/.lola/images/new.png', '/checkout/.lola/images/old.png'];
+  read.mockResolvedValue('data:image/png;base64,original');
+  render(MessageGallery, { images: paths.map((path, i) => ({ n: i + 1, path })), initial: 0,
+    worktree: '/checkout', attachmentRoot: '/private/tab', thumbs: new Map(), onclose: vi.fn() });
+  await waitFor(() => expect(read).toHaveBeenCalledWith('/private/tab', paths[0]));
+  await fireEvent.click(screen.getByRole('button', { name: 'Next image' }));
+  await waitFor(() => expect(read).toHaveBeenCalledWith('/checkout', paths[1]));
+});

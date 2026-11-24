@@ -89,7 +89,7 @@ async function sendPart(args: AttachImageArgs): Promise<AttachImageData> {
 /** The session whose worktree is `worktree`, live first, else an ended one that kept it. */
 async function sessionFor(worktree: string): Promise<string> {
   const live = await bridge.request<P.SessionsData>("TalkService.ReadAttachmentImage", "sessions");
-  const hit = live?.sessions?.find((s) => s.worktree === worktree);
+  const hit = live?.sessions?.find((s) => (s.attachmentRoot || s.worktree) === worktree);
   if (hit) return hit.id;
   const ended = await bridge.request<P.EndedSessionsData>("TalkService.ReadAttachmentImage", "endedSessions");
   const kept = ended?.sessions?.find((s) => s.keptWorktree === worktree);

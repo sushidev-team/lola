@@ -1005,6 +1005,9 @@ func (d *Daemon) sessionsData() protocol.SessionsData {
 			si.Checks = s.PR.ChecksState
 			si.Review = s.PR.ReviewDecision
 		}
+		if s.Kind == session.KindLocal {
+			si.AttachmentRoot = attachmentRoot(d.home, s)
+		}
 		si.Sandbox = s.Sandbox
 		si.SSH = d.sshGlance(s.ID)
 		if s.Stack {

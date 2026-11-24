@@ -109,6 +109,75 @@ func TestAttachImageHappyPath(t *testing.T) {
 	}
 }
 
+func TestLocalSessionImageRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		location, sandbox, root string
+	}{
+		{"main", "", "local-sessions/lola-local-test"},
+		{"checkout", "", "local-sessions/lola-local-test"},
+		{"agent-tab", "", "local-sessions/lola-local-test/work"},
+		{"agent-tab", "docker", "sandbox/lola-local-test"},
+		{"ssh", "docker", "local-sessions/lola-local-test/work"},
+	} {
+		t.Run(tc.location+tc.sandbox, func(t *testing.T) {
+			e := newAttachEnv(t)
+			e.id = "lola-local-test"
+			root := filepath.Join(e.d.home, tc.root)
+			if err := os.MkdirAll(root, 0700); err != nil {
+				t.Fatal(err)
+			}
+			cwd := t.TempDir()
+			if tc.location == "ssh" {
+				cwd = root
+			}
+			s := session.Session{ID: e.id, Source: "native", Kind: session.KindLocal,
+				Location: tc.location, Sandbox: tc.sandbox, Worktree: cwd, Agent: "claude"}
+			if tc.sandbox == "docker" {
+				if tc.location == "ssh" {
+					gitguard.Deny(cwd) // the direct SSH scratch directory has no git repository
+				} else {
+					pin := gitguard.Pin{CommonDir: "/git", GitDir: "/git/worktrees/owner"}
+					s.GitPin = &pin
+					gitguard.Set(cwd, pin)
+				}
+				t.Cleanup(func() { gitguard.Clear(cwd) })
+			}
+			e.d.sessions.Upsert(s)
+			var desktopRoot string
+			for _, s := range e.d.sessionsData().Sessions {
+				if s.ID == e.id {
+					desktopRoot = s.AttachmentRoot
+				}
+			}
+			if desktopRoot != root {
+				t.Fatalf("desktop image root = %q, want %q", desktopRoot, root)
+			}
+			data := pngBytes(64)
+			got, err := e.part(t.Context(), "upload-key-1", 0, data, true)
+			if err != nil || filepath.Dir(got.Path) != filepath.Join(root, ".lola", "images") {
+				t.Fatalf("upload: %+v, %v", got, err)
+			}
+			read, err := e.d.handleAttachmentImage(t.Context(), protocol.AttachmentImageArgs{Session: e.id, Path: got.Path})
+			if err != nil || !bytes.Equal(read.Data, data) {
+				t.Fatalf("read: %+v, %v", read, err)
+			}
+			if _, err := e.d.handleAttachmentImage(t.Context(), protocol.AttachmentImageArgs{Session: "att-1", Path: got.Path}); err == nil {
+				t.Fatal("another session could read the private image")
+			}
+			if tc.location == "agent-tab" && tc.sandbox == "docker" {
+				gitguard.Clear(cwd)
+				_, err := e.part(t.Context(), "lost-pin-1", 0, data, true)
+				wantErr(t, err, protocol.AttachErrPin)
+			}
+			if cwd != root {
+				if _, err := os.Stat(filepath.Join(cwd, ".lola")); !os.IsNotExist(err) {
+					t.Fatalf("unexpected .lola in borrowed checkout: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestAttachImageRefusals(t *testing.T) {
 	small := pngBytes(64)
 	t.Run("unknown session", func(t *testing.T) {
@@ -125,7 +194,7 @@ func TestAttachImageRefusals(t *testing.T) {
 		_, err := e.part(context.Background(), "upload-key-1", 0, small, true)
 		wantErr(t, err, protocol.AttachErrNoFolder)
 	})
-	t.Run("local session under home", func(t *testing.T) {
+	t.Run("invalid local session id", func(t *testing.T) {
 		e := newAttachEnv(t)
 		s, _ := e.d.sessions.Get(e.id)
 		s.Kind = session.KindLocal

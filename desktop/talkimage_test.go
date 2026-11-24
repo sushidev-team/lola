@@ -59,17 +59,17 @@ func TestAttachImageFileRefuses(t *testing.T) {
 
 func TestImagesDirStaysUnderHomeAndFollowsNoLink(t *testing.T) {
 	wt := imageWorktree(t)
-	if _, err := imagesDir(t.TempDir()); err == nil {
+	if _, err := imagesDir(t.TempDir(), true); err == nil {
 		t.Error("a folder outside lola's home was taken")
 	}
-	if _, err := imagesDir(wt + "/../../../../etc"); err == nil {
+	if _, err := imagesDir(wt+"/../../../../etc", true); err == nil {
 		t.Error("a path climbing out was taken")
 	}
 	outside := t.TempDir()
 	if err := os.Symlink(outside, filepath.Join(wt, ".lola")); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := imagesDir(wt); err == nil {
+	if _, err := imagesDir(wt, true); err == nil {
 		t.Error("a linked .lola was followed")
 	}
 }
@@ -107,13 +107,36 @@ func TestAttachClipboardImage(t *testing.T) {
 	}
 }
 
+func TestClipboardImageInPrivateSessionDirectory(t *testing.T) {
+	imageWorktree(t)
+	root := filepath.Join(os.Getenv("LOLA_HOME"), "local-sessions", "lola-local-checkout")
+	if err := os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	png, thumb := clipboardPNG, imageThumb
+	t.Cleanup(func() { clipboardPNG, imageThumb = png, thumb })
+	imageThumb = func(string) string { return "" }
+	clipboardPNG = func(_ context.Context, dest string) error {
+		return os.WriteFile(dest, pngHead, 0600)
+	}
+	svc := &TalkService{}
+	got, err := svc.AttachClipboardImage(root)
+	if err != nil || filepath.Dir(got.Path) != filepath.Join(root, ".lola", "images") {
+		t.Fatalf("paste: %+v, %v", got, err)
+	}
+	if data, err := svc.ReadAttachmentImage(root, got.Path); err != nil || !strings.HasPrefix(data, "data:image/png;base64,") {
+		t.Fatalf("gallery: %s, %v", data, err)
+	}
+}
+
 func TestReadAttachmentImage(t *testing.T) {
 	wt := imageWorktree(t)
-	dir, err := imagesDir(wt)
+	dir, err := imagesDir(wt, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(dir, "a.png")
+	defer dir.Close()
+	path := filepath.Join(dir.Name(), "a.png")
 	if err := os.WriteFile(path, pngHead, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -124,11 +147,11 @@ func TestReadAttachmentImage(t *testing.T) {
 	}
 	outside := filepath.Join(t.TempDir(), "outside.png")
 	_ = os.WriteFile(outside, pngHead, 0600)
-	link := filepath.Join(dir, "link.png")
+	link := filepath.Join(dir.Name(), "link.png")
 	_ = os.Symlink(outside, link)
-	text := filepath.Join(dir, "text.png")
+	text := filepath.Join(dir.Name(), "text.png")
 	_ = os.WriteFile(text, []byte("private text"), 0600)
-	for _, p := range []string{outside, link, text, filepath.Join(dir, "missing.png")} {
+	for _, p := range []string{outside, link, text, filepath.Join(dir.Name(), "missing.png")} {
 		if _, err := svc.ReadAttachmentImage(wt, p); err == nil {
 			t.Errorf("accepted %s", p)
 		}

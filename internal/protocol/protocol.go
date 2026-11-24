@@ -476,6 +476,9 @@ type SessionInfo struct {
 	Worktree  string `json:"worktree"` // native runtime: the session's git worktree dir; "" otherwise
 	Age       string `json:"age"`      // concise age since first observed, e.g. "2h" or "Oct 4"
 
+	// AttachmentRoot overrides Worktree for agents with a separate image directory.
+	AttachmentRoot string `json:"attachmentRoot,omitempty"`
+
 	FirstSeen time.Time `json:"firstSeen,omitzero"` // raw session age origin for live client formatting
 
 	// Sandbox is "docker" when the agent runs in a container

@@ -1215,17 +1215,18 @@ Key: `(peerKey, session, name)`; `peerKey` = `Peer.DeviceID` or `"local"`.
 
 Part 0 (and only part 0):
 
-1. `s, ok := d.sessions.Get(session)`; not live, `s.Kind == session.KindLocal`,
-   `IsAgentless()`, or `GoalManaged()` → `AttachErrNoFolder`. A
-   borrowed-directory session never takes images, wherever its directory is
-   (also under `$LOLA_HOME`).
-2. `wt := sessionWorktree(d.home, s)`; must be absolute, `filepath.Clean`ed,
-   strictly under `filepath.Abs(d.home)` + separator (the desktop rule) →
-   else `AttachErrNoFolder`.
-3. Sandbox: `if _, pin, ok := gitguard.Lookup(wt); ok && !pin.Valid()` →
-   `AttachErrPin` (a sandboxed record that lost its pin fails closed). A
-   pinned sandboxed worktree is accepted: the path is the same inside the
-   container.
+1. The target must be a live agent session. Unknown sessions, stack lanes,
+   agentless sessions and goal-managed sessions return `AttachErrNoFolder`.
+2. The daemon resolves the attachment root from the session record. Owned
+   worktrees use their worktree. Borrowed checkouts use Lola's private
+   `local-sessions/<id>` directory. Host agent tabs and direct SSH sessions
+   use their private `work` directory. Docker tabs use their existing
+   `sandbox/<id>` mount. The resolved root must lie strictly under Lola's
+   home. The client can use the optional `SessionInfo.attachmentRoot`
+   override to choose the same root for a desktop paste.
+3. Check the worktree's gitguard pin. A denied checkout returns
+   `AttachErrPin`. A Docker tab requires its owner's matching pin.
+   A direct SSH session's private scratch directory has no Git repository.
 4. `root, err := os.OpenRoot(wt)`; error → `AttachErrGone`. ALL filesystem
    access below goes through `root` and then `imgRoot` (openat-based; a link
    cannot leave them), and NO command is executed — no `sips`, no git — so
@@ -1334,8 +1335,7 @@ const (
 Daemon steps (`handleAttachmentImage`):
 
 1. Worktree from the session, never from the client:
-   - live: `s.Kind == session.KindLocal` → `AttachErrNotHere`; else
-     `sessionWorktree(d.home, s)` under the §12.2 step 2 rule;
+   - live: use the same session attachment root as an upload (§12.2 step 2);
    - ended: `sshstore.ReadEnded(d.home, id).KeptWorktree`, which must lie
      strictly under `filepath.Join(home, "worktrees")` + separator (an ended
      record carries no kind, and a borrowed directory is never under it);
@@ -1361,7 +1361,7 @@ Daemon steps (`handleAttachmentImage`):
    `Offset % AttachChunkBytes != 0` or `Offset > Size` → `AttachErrUnreadable`.
 
 The mobile shim implements `TalkService.ReadAttachmentImage(worktree, path)`
-by resolving the session whose `SessionInfo.worktree` (or
+by resolving the session whose `SessionInfo.attachmentRoot || SessionInfo.worktree` (or
 `EndedSession.keptWorktree`) equals `worktree`, fetching chunks sequentially
 and returning a `data:` URL — the same string the desktop returns, so
 `MessageGallery.svelte` is unchanged.
@@ -1468,11 +1468,11 @@ Add under "Invariants", after "Typing into an agent":
   clock-derived field there. The timeline topic serves only
   `handleSessionTimeline` (`publicTimeline`) output.
 - `attachImage` writes only through `os.Root` of the session's
-  `.lola/images` (under `$LOLA_HOME`, never a `KindLocal` directory), runs no
+  `.lola/images` (under `$LOLA_HOME`, never a borrowed checkout), runs no
   command, refuses a sandboxed worktree whose gitguard pin is lost, keeps the
   upload's descriptor and verifies the linked file is that inode, is capped
   per upload, per session, per device per day and by free disk, and returns
-  the desktop's token (`<worktree>/.lola/images/paste-<16 hex><ext>`).
+  the desktop's token (`<attachment root>/.lola/images/paste-<16 hex><ext>`).
   `attachmentImage` roots at `.lola/images` and never serves a link.
 ```
 
@@ -1599,7 +1599,7 @@ Work item 7 also rewrites `internal/daemon/talkfeed.go`'s header comment:
 - `TestAttachImageHappyPath` — 3 parts, sniff matches, token path, 0600,
   under `.lola/images`, name pattern matches `SENT_IMAGE_RE`'s Go twin.
 - `TestAttachImageRefusals` — table: unknown session, worktree outside home,
-  `KindLocal` session (cwd under `$LOLA_HOME`), `.lola` symlink, `images`
+  malformed local session id, `.lola` symlink, `images`
   symlink to `/tmp`, symlinked tmp pre-planted, wrong mime sniff, HEIC mime,
   > 20 MiB, out-of-order part, part 0 twice, third concurrent upload,
   gitguard-denied worktree.
@@ -1615,7 +1615,7 @@ Work item 7 also rewrites `internal/daemon/talkfeed.go`'s header comment:
   `KeptWorktree`; refused: `../`, other session's images dir, non-clean path,
   symlinked file pointing outside, symlinked file pointing at another
   worktree file (`.lola/images/x.png -> ../../README.png`), linked `images`
-  folder (`AttachErrFolderUnavailable`), `KindLocal` live session, ended
+  folder (`AttachErrFolderUnavailable`), another local session’s image, ended
   record whose `KeptWorktree` is outside `$LOLA_HOME/worktrees`.
 
 `mobile/src/wire` (spec 04 consumes, this spec provides)

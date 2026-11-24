@@ -108,7 +108,7 @@
   {@const h = row.item.human}
   {#if h}
     {@const sent = youAttachments(h.text)}
-    {#if gallery !== null}<MessageGallery images={sent.images} initial={gallery} worktree={session?.worktree ?? ""} thumbs={view.sentThumbs} onclose={() => gallery = null} />{/if}
+    {#if gallery !== null}<MessageGallery images={sent.images} initial={gallery} worktree={session?.worktree ?? ""} attachmentRoot={session?.attachmentRoot} thumbs={view.sentThumbs} onclose={() => gallery = null} />{/if}
     <span class="sr-only">You said</span>
     <div class="cv-user-message text-prose" class:cv-message-with-images={sent.images.length > 0} data-voice="you">
       {#if sent.images.length}

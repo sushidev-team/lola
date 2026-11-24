@@ -4,10 +4,11 @@
   import { SvelteMap } from 'svelte/reactivity';
   import Modal from '../Modal.svelte';
 
-  let { images, initial, worktree, thumbs, onclose }: {
+  let { images, initial, worktree, attachmentRoot, thumbs, onclose }: {
     images: { n: number; path: string }[];
     initial: number;
     worktree: string;
+    attachmentRoot?: string;
     thumbs: Map<string, string>;
     onclose: () => void;
   } = $props();
@@ -25,7 +26,9 @@
     if (originals.has(path)) { loading = false; return; }
     let cancelled = false;
     loading = true;
-    TalkService.ReadAttachmentImage(worktree, path).then(data => {
+    // Older messages can still reference an image saved in the original worktree.
+    const root = attachmentRoot && path.startsWith(attachmentRoot + '/.lola/images/') ? attachmentRoot : worktree;
+    TalkService.ReadAttachmentImage(root, path).then(data => {
       if (!cancelled) originals.set(path, data);
     }).catch(() => {
       if (!cancelled) error = 'Original image unavailable';

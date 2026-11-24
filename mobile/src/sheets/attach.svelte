@@ -69,8 +69,10 @@
   }
 
   const pick = (source: PickSource) => run(() => pickAndUpload(id, source));
-  const paste = () =>
-    run(() => TalkService.AttachClipboardImage(store.sessionById(id)?.worktree ?? ""));
+  const paste = () => {
+    const session = store.sessionById(id);
+    return run(() => TalkService.AttachClipboardImage(session?.attachmentRoot || session?.worktree || ""));
+  };
 
   onDestroy(() => settleImage(null));
 </script>

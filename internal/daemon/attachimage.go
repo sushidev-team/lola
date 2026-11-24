@@ -17,9 +17,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sushidev-team/lola/internal/config"
 	"github.com/sushidev-team/lola/internal/gitguard"
+	"github.com/sushidev-team/lola/internal/lolaenv"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/remote"
+	"github.com/sushidev-team/lola/internal/runtime"
 	"github.com/sushidev-team/lola/internal/session"
 	"github.com/sushidev-team/lola/internal/sshstore"
 )
@@ -169,6 +172,30 @@ func attachUnder(dir, base string) (string, bool) {
 	return c, true
 }
 
+// attachmentRoot is the existing directory where this agent can read .lola/images.
+func attachmentRoot(home string, s session.Session) string {
+	if s.Kind != session.KindLocal {
+		return sessionWorktree(home, s)
+	}
+	private := lolaenv.LocalSessionDir(home, s.ID)
+	if private == "" {
+		return ""
+	}
+	switch s.Location {
+	case runtime.LocationSSH:
+		return filepath.Join(private, "work")
+	case runtime.LocationAgentTab:
+		if s.Sandbox == config.SandboxDocker {
+			// agentTabContainer mounts the private state directory at the same path
+			// on both sides. The checkout's .lola is masked in that container.
+			return filepath.Join(home, "sandbox", s.ID)
+		}
+		return filepath.Join(private, "work")
+	default:
+		return private
+	}
+}
+
 // openImagesRoot opens <wt>/.lola/images, creating the folders when create is
 // set. Anything that is not a plain directory, or any failure to open through
 // the root, is link (the folder cannot be trusted). gone is a missing worktree.
@@ -248,14 +275,22 @@ func (r *attachRegistry) open(d *Daemon, key attachKey, a protocol.AttachImageAr
 	}
 
 	s, ok := d.sessions.Get(a.Session)
-	if _, lane := session.SplitLaneID(a.Session); !ok || lane != "" || s.Kind == session.KindLocal || s.IsAgentless() || s.GoalManaged() {
+	if _, lane := session.SplitLaneID(a.Session); !ok || lane != "" || s.IsAgentless() || s.GoalManaged() {
 		return nil, attachErr(protocol.AttachErrNoFolder)
 	}
-	wt, ok := attachUnder(sessionWorktree(d.home, s), d.home)
+	wt, ok := attachUnder(attachmentRoot(d.home, s), d.home)
 	if !ok {
 		return nil, attachErr(protocol.AttachErrNoFolder)
 	}
-	if _, pin, ok := gitguard.Lookup(wt); ok && !pin.Valid() {
+	// Direct SSH sessions mount only their private scratch directory. It has
+	// no Git metadata or pin. An agent tab still depends on its owner's pin.
+	at, pin, pinned := gitguard.Lookup(sessionWorktree(d.home, s))
+	directSSH := s.Kind == session.KindLocal && s.Location == runtime.LocationSSH
+	if !directSSH && pinned && !pin.Valid() {
+		return nil, attachErr(protocol.AttachErrPin)
+	}
+	if s.Location == runtime.LocationAgentTab && s.Sandbox == config.SandboxDocker &&
+		(!pinned || at != s.Worktree || s.GitPin == nil || *s.GitPin != pin) {
 		return nil, attachErr(protocol.AttachErrPin)
 	}
 	imgRoot, gone, err := openImagesRoot(wt, true)
@@ -534,10 +569,10 @@ func (d *Daemon) handleAttachmentImage(_ context.Context, a protocol.AttachmentI
 	var zero protocol.AttachmentImageData
 	var wt string
 	if s, ok := d.sessions.Get(a.Session); ok {
-		if _, lane := session.SplitLaneID(a.Session); lane != "" || s.Kind == session.KindLocal {
+		if _, lane := session.SplitLaneID(a.Session); lane != "" {
 			return zero, attachErr(protocol.AttachErrNotHere)
 		}
-		wt, ok = attachUnder(sessionWorktree(d.home, s), d.home)
+		wt, ok = attachUnder(attachmentRoot(d.home, s), d.home)
 		if !ok {
 			return zero, attachErr(protocol.AttachErrNotHere)
 		}

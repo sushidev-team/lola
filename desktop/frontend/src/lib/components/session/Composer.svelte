@@ -249,12 +249,12 @@
     }
   }
   function attachClipboardImage() {
-    const worktree = session?.worktree ?? "";
-    return prepareImage(() => TalkService.AttachClipboardImage(worktree));
+    const root = session?.attachmentRoot || session?.worktree || "";
+    return prepareImage(() => TalkService.AttachClipboardImage(root));
   }
   function attachImageFile(clip: string) {
-    const worktree = session?.worktree ?? "";
-    return prepareImage(() => TalkService.AttachImageFile(worktree, clip.trim()), clip);
+    const root = session?.attachmentRoot || session?.worktree || "";
+    return prepareImage(() => TalkService.AttachImageFile(root, clip.trim()), clip);
   }
   // Images dropped anywhere on this session's conversation view attach as a paste of their path would.
   onMount(() =>

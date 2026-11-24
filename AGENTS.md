@@ -311,11 +311,11 @@ one `tmux ls`, gh facts → delivery axis, pane → agent axis),
   clock-derived field there. The timeline topic serves only
   `handleSessionTimeline` (`publicTimeline`) output.
 - `attachImage` writes only through `os.Root` of the session's
-  `.lola/images` (under `$LOLA_HOME`, never a `KindLocal` directory), runs no
+  `.lola/images` (under `$LOLA_HOME`, never a borrowed checkout), runs no
   command, refuses a sandboxed worktree whose gitguard pin is lost, keeps the
   upload's descriptor and verifies the linked file is that inode, is capped
   per upload, per session, per device per day and by free disk, and returns
-  the desktop's token (`<worktree>/.lola/images/paste-<16 hex><ext>`).
+  the desktop's token (`<attachment root>/.lola/images/paste-<16 hex><ext>`).
   `attachmentImage` roots at `.lola/images` and never serves a link.
 
 ### Pane classification (`attention.Classify`)

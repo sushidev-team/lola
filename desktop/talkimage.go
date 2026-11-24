@@ -19,9 +19,8 @@ import (
 )
 
 // An image a person gives an agent goes in as a file the agent can read, because an agent's composer
-// takes text from lola. It lands in the session's .lola/images: inside the worktree, so reading it
-// asks no permission and a sandbox mounts it, and under .lola/, which git excludes, checkpoints skip
-// and teardown takes with the worktree.
+// takes text from lola. It lands in .lola/images beneath the session's attachment root. Borrowed
+// checkouts have a private root, and a container sees the same absolute path as the host.
 //
 // This runs on a person's paste, in the app and not the daemon, because an image can be larger than
 // a socket line. An agent can write to .lola/, so nothing here follows a link or overwrites a file.
@@ -83,36 +82,18 @@ var imageThumb = func(src string) string {
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(data)
 }
 
-func attached(path string) ImageAttachment {
-	return ImageAttachment{Path: path, Thumb: imageThumb(path)}
-}
-
 // ReadAttachmentImage reads an original attachment for the message gallery. The read stays
 // inside this session's image folder, even if a worker has replaced a file with a symlink.
 func (s *TalkService) ReadAttachmentImage(worktree, path string) (string, error) {
-	home, err := config.Home()
-	if err != nil {
-		return "", err
-	}
-	wt := filepath.Clean(worktree)
-	base, err := filepath.Abs(home)
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(wt, ".lola", "images")
-	if !filepath.IsAbs(worktree) || !strings.HasPrefix(wt, base+string(filepath.Separator)) || filepath.Dir(filepath.Clean(path)) != dir {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path || filepath.Dir(path) != filepath.Join(worktree, ".lola", "images") {
 		return "", errors.New("this is not an attachment in this session")
 	}
-	resolved, err := filepath.EvalSymlinks(dir)
-	if err != nil || resolved != dir {
+	root, err := imagesDir(worktree, false)
+	if err != nil {
 		return "", errors.New("this session's image folder is unavailable")
 	}
-	root, err := os.OpenRoot(dir)
-	if err != nil {
-		return "", err
-	}
 	defer root.Close()
-	f, err := root.Open(filepath.Base(path))
+	f, err := root.OpenFile(filepath.Base(path), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		return "", errors.New("this image is no longer available")
 	}
@@ -132,42 +113,60 @@ func (s *TalkService) ReadAttachmentImage(worktree, path string) (string, error)
 	return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data), nil
 }
 
-// imagesDir finds or makes a session's image folder. worktree comes from the client, so it must lie
-// under lola's home, and no step of the way may be a link.
-func imagesDir(worktree string) (string, error) {
-	if worktree == "" || !filepath.IsAbs(worktree) {
-		return "", errors.New("this session has no folder to put an image in")
-	}
+// imagesDir opens the session's .lola/images from Lola's home. Each directory
+// handle pins its parent while we check and open its child.
+func imagesDir(worktree string, create bool) (*os.Root, error) {
 	base, err := config.Home()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	home, err := filepath.Abs(base)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	clean := filepath.Clean(worktree)
-	if !strings.HasPrefix(clean, home+string(filepath.Separator)) {
-		return "", errors.New("this session has no folder to put an image in")
+	rel, err := filepath.Rel(home, worktree)
+	if err != nil || !filepath.IsLocal(rel) || rel == "." {
+		return nil, errors.New("this session has no folder to put an image in")
 	}
-	dir := clean
-	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
-		return "", errors.New("this session's folder is gone")
+	root, err := os.OpenRoot(home)
+	if err != nil {
+		return nil, err
 	}
-	for _, part := range []string{".lola", "images"} {
-		dir = filepath.Join(dir, part)
-		if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-			return "", err
-		}
-		info, err := os.Lstat(dir)
+	parts := strings.Split(rel, string(filepath.Separator))
+	for i, part := range append(parts, ".lola", "images") {
+		child, err := imageSubdir(root, part, create && i >= len(parts))
+		root.Close()
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		if !info.Mode().IsDir() {
-			return "", errors.New("refusing to write an image through a link in this session's folder")
+		root = child
+	}
+	return root, nil
+}
+
+func imageSubdir(parent *os.Root, name string, create bool) (*os.Root, error) {
+	if create {
+		if err := parent.Mkdir(name, 0700); err != nil && !errors.Is(err, os.ErrExist) {
+			return nil, err
 		}
 	}
-	return dir, nil
+	info, err := parent.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, errors.New("refusing to follow a link in this session's image folder")
+	}
+	child, err := parent.OpenRoot(name)
+	if err != nil {
+		return nil, err
+	}
+	opened, err := child.Stat(".")
+	if err != nil || !os.SameFile(info, opened) {
+		child.Close()
+		return nil, errors.New("this session's image folder changed")
+	}
+	return child, nil
 }
 
 func newImageName(ext string) (string, error) {
@@ -179,7 +178,7 @@ func newImageName(ext string) (string, error) {
 }
 
 // copyImage copies a file a person pointed at, once it has shown it is an image of a size to carry.
-func copyImage(src, dir string) (string, error) {
+func copyImage(src string, dir *os.Root) (string, error) {
 	ext := strings.ToLower(filepath.Ext(src))
 	if !imageExts[ext] {
 		return "", errors.New("that is not a png, jpeg, gif or webp file")
@@ -208,8 +207,7 @@ func copyImage(src, dir string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	dest := filepath.Join(dir, name)
-	out, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
+	out, err := dir.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
 		return "", err
 	}
@@ -218,51 +216,46 @@ func copyImage(src, dir string) (string, error) {
 		err = cerr
 	}
 	if err != nil {
-		_ = os.Remove(dest)
+		_ = dir.Remove(name)
 		return "", err
 	}
-	return dest, nil
+	return filepath.Join(dir.Name(), name), nil
 }
 
 // AttachImageFile copies an image file into a session's folder and answers the copy's path.
 func (s *TalkService) AttachImageFile(worktree, src string) (ImageAttachment, error) {
-	dir, err := imagesDir(worktree)
+	dir, err := imagesDir(worktree, true)
 	if err != nil {
 		return ImageAttachment{}, err
 	}
+	defer dir.Close()
 	dest, err := copyImage(src, dir)
 	if err != nil {
 		return ImageAttachment{}, err
 	}
-	return attached(dest), nil
+	return ImageAttachment{Path: dest, Thumb: imageThumb(src)}, nil
 }
 
 // AttachClipboardImage saves the image on the clipboard into a session's folder and answers its
 // path: image data first, then a copied file. Nothing else on the clipboard is read or kept.
 func (s *TalkService) AttachClipboardImage(worktree string) (ImageAttachment, error) {
-	dir, err := imagesDir(worktree)
+	// osascript opens its destination by path. Keep that write in private scratch
+	// and publish the finished file through the same rooted copy as a dropped file.
+	tmp, err := os.MkdirTemp("", "lola-clipboard-")
 	if err != nil {
 		return ImageAttachment{}, err
 	}
+	defer os.RemoveAll(tmp)
 	ctx, cancel := context.WithTimeout(context.Background(), clipboardWait)
 	defer cancel()
-	name, err := newImageName(".png")
-	if err != nil {
-		return ImageAttachment{}, err
-	}
-	dest := filepath.Join(dir, name)
-	if err := clipboardPNG(ctx, dest); err == nil {
-		if info, serr := os.Lstat(dest); serr == nil && info.Mode().IsRegular() && info.Size() > 0 {
-			return attached(dest), nil
+	png := filepath.Join(tmp, "clipboard.png")
+	if err := clipboardPNG(ctx, png); err == nil {
+		if info, err := os.Stat(png); err == nil && info.Size() > 0 {
+			return s.AttachImageFile(worktree, png)
 		}
 	}
-	_ = os.Remove(dest)
 	if src, err := clipboardFile(ctx); err == nil && src != "" {
-		copied, err := copyImage(src, dir)
-		if err != nil {
-			return ImageAttachment{}, err
-		}
-		return attached(copied), nil
+		return s.AttachImageFile(worktree, src)
 	}
 	return ImageAttachment{}, errors.New("there is no image on the clipboard")
 }
