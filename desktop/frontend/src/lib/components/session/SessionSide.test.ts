@@ -668,7 +668,11 @@ it('opens dev and external new-tab links in Preview, keeping the source page liv
 
 it('edits a staged label inline and sends its revised text alongside the drawings', async () => {
   const origin = 'http://preview.localhost:5555', url = 'http://localhost:3000';
-  const id = freshSession({ devUrls: [url] });
+  const id = freshSession({ devUrls: [url], worktree: '/w' });
+  const snapshot = vi.fn().mockResolvedValue('marked-image');
+  const path = '/w/.lola/images/paste-0123456789abcdef.jpg';
+  vi.stubGlobal('webkit', {messageHandlers:{lolaAnnotationSnapshot:{postMessage:snapshot}}});
+  vi.mocked(PreviewService.SaveAnnotationImage).mockResolvedValueOnce(path);
   vi.mocked(PreviewService.Open).mockResolvedValue(origin);
   vi.mocked(DaemonService.SendFeedback).mockResolvedValueOnce({ queued: true } as never);
   const refresh = vi.spyOn(store, 'refresh').mockResolvedValue();
@@ -676,6 +680,7 @@ it('edits a staged label inline and sends its revised text alongside the drawing
   render(SessionPreview, { inline: {sessionId: id, url} });
   try {
     const frame = await screen.findByTitle('Preview of localhost:3000') as HTMLIFrameElement;
+    vi.spyOn(frame, 'getBoundingClientRect').mockReturnValue(new DOMRect(100, 50, 800, 600));
     const post = vi.spyOn(frame.contentWindow!, 'postMessage');
     const say = (data: object) => fireEvent(window, new MessageEvent('message', {
       source: frame.contentWindow, origin, data: {source:'lola-preview', documentId:'test-page', ...data},
@@ -686,10 +691,13 @@ it('edits a staged label inline and sends its revised text alongside the drawing
       await fireEvent.click(button(name));
       await say({type:'mode', picking:true});
       await fireEvent.click(button('Place preview annotation')); // Keyboard placement.
-      await say({type:'pick', selector:'#delivery', url:origin, rect:{x:0,y:0,w:50,h:50}});
+      const arrow = name === 'Draw arrow' ? {tail:'5.1 PPH 1 Projektvorbereitung', tip:'iframe#proposal', embedded:true} : undefined;
+      await say({type:'pick', selector:arrow ? 'iframe#proposal' : '#delivery', arrow, url:origin, rect:{x:0,y:0,w:50,h:50}});
       await say({type:'mode', picking:false});
     };
     await place('Draw arrow');
+    expect(snapshot).toHaveBeenCalledOnce();
+    await waitFor(() => expect(PreviewService.SaveAnnotationImage).toHaveBeenCalledWith('/w', 'marked-image'));
     expect(screen.queryByRole('textbox', {name:'Element comment'})).toBeNull();
     await place('Draw rectangle');
     expect(feedback.elementsFor(id).map(e => e.mark?.kind)).toEqual(['arrow', 'area']);
@@ -718,13 +726,13 @@ it('edits a staged label inline and sends its revised text alongside the drawing
     await fireEvent.click(button('Send feedback (3)'));
     expect(DaemonService.SendFeedback).toHaveBeenLastCalledWith(expect.objectContaining({
       session:id, elements:[
-        expect.objectContaining({annotation:expect.stringContaining('Arrow at')}),
+        expect.objectContaining({selector:'iframe#proposal', annotation:expect.stringContaining('Arrow starts at: 5.1 PPH 1 Projektvorbereitung\nArrow points to: iframe#proposal'), note:expect.stringContaining(path)}),
         expect.objectContaining({annotation:expect.stringContaining('Rectangle at')}),
         expect.objectContaining({selector:':root', annotation:expect.stringContaining('Position anchor: #delivery\nLabel: Delivery options'), note:'Delivery options'}),
       ],
     }));
     await waitFor(() => expect(feedback.elementsFor(id)).toHaveLength(0));
-  } finally { feedback.clear(id); refresh.mockRestore(); }
+  } finally { feedback.clear(id); refresh.mockRestore(); vi.unstubAllGlobals(); }
 });
 
 it('confirms clearing preview feedback and keeps the session’s diff drafts', async () => {

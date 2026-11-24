@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -203,6 +204,10 @@ func copyImage(src string, dir *os.Root) (string, error) {
 	if _, err := in.Seek(0, io.SeekStart); err != nil {
 		return "", err
 	}
+	return writeImage(in, dir, ext)
+}
+
+func writeImage(in io.Reader, dir *os.Root, ext string) (string, error) {
 	name, err := newImageName(ext)
 	if err != nil {
 		return "", err
@@ -220,6 +225,24 @@ func copyImage(src string, dir *os.Root) (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir.Name(), name), nil
+}
+
+// SaveAnnotationImage stores the cropped WebKit snapshot with the session's other attachments.
+func (s *PreviewService) SaveAnnotationImage(worktree, encoded string) (string, error) {
+	const maxSnapshot = 8 << 20
+	if len(encoded) > base64.StdEncoding.EncodedLen(maxSnapshot) {
+		return "", errors.New("preview image is too large")
+	}
+	jpg, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(jpg) > maxSnapshot || http.DetectContentType(jpg) != "image/jpeg" {
+		return "", errors.New("invalid preview image")
+	}
+	dir, err := imagesDir(worktree, true)
+	if err != nil {
+		return "", err
+	}
+	defer dir.Close()
+	return writeImage(bytes.NewReader(jpg), dir, ".jpg")
 }
 
 // AttachImageFile copies an image file into a session's folder and answers the copy's path.

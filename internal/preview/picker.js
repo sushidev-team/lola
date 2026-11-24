@@ -20,7 +20,7 @@
   }
 
   function part(el) {
-    var tag = el.tagName.toLowerCase();
+    var tag = esc(el.localName);
     if (el.id) return tag + "#" + esc(el.id);
     var s = tag;
     var cls = (el.getAttribute("class") || "").split(/\s+/).filter(Boolean).slice(0, 2);
@@ -43,6 +43,30 @@
       if (n.id || parts.length >= 6) break;
     }
     return parts.join(" > ");
+  }
+
+  function anchorSelector(el) {
+    var path = selector(el);
+    function unique(s) {
+      var matches = document.querySelectorAll(s);
+      return matches.length === 1 && matches[0] === el;
+    }
+    if (path.length <= 300 && unique(path)) return path;
+    // Repeated rows can share the entire six-part display selector. Include
+    // the distinguishing ancestor and omit CSS classes to keep the anchor short.
+    var parts = [];
+    for (var n = el; n; n = n.parentElement) {
+      var tag = esc(n.localName);
+      if (n.previousElementSibling || n.nextElementSibling) {
+        var index = 1;
+        for (var p = n.previousElementSibling; p; p = p.previousElementSibling) index++;
+        tag += ":nth-child(" + index + ")";
+      }
+      parts.unshift(tag);
+      path = parts.join(">");
+      if (unique(path)) return path;
+    }
+    return path;
   }
 
   function pickable(t) {
@@ -150,17 +174,39 @@
     var el = first || document.elementFromPoint(x, y) || document.body;
     if (el === document.documentElement) el = document.body;
     if (!area && el === document.body) return;
+    if (area && m.start && [m.start.x, m.start.y].every(Number.isFinite)) {
+      var tail = document.elementFromPoint(m.start.x, m.start.y);
+      pick(el, area, [], false, m.editId, false, {
+        tail: endpoint(tail), tip: endpoint(el),
+        embedded: [tail, el].some(function (node) { return node && node.matches("iframe,canvas,img,embed,object,video"); })
+      });
+      return;
+    }
     pick(el, area, hits, more, m.editId);
   }
 
-  function pick(el, area, targets, more, editId, label) {
+  function endpoint(el) {
+    if (!pickable(el)) return "Page background";
+    // A small table row gives a cell its item number and name. Never quote
+    // the text of a whole document, or the source of an embedded preview.
+    if (el.matches("iframe,canvas,img,embed,object,video")) {
+      return selector(el).slice(0, 240) + " (embedded content at this point)";
+    }
+    var target = el.closest("tr,[role=row]") || el;
+    var words = (target.innerText || "").trim().replace(/\s+/g, " ");
+    var text = words.length <= 400 ? words : "";
+    return selector(el).slice(0, 240) + (text ? " — " + text : "");
+  }
+
+  function pick(el, area, targets, more, editId, label, arrow) {
     var r = anchorBounds(el, label);
     post({
       type: "pick",
       url: location.href,
-      selector: el === document.documentElement ? ":root" : selector(el),
+      selector: el === document.documentElement ? ":root" : anchorSelector(el),
       ...(editId && { editId: editId }),
       tag: el.tagName.toLowerCase(),
+      ...(arrow && { arrow: arrow }),
       html: area ? "" : el.outerHTML.slice(0, 6000),
       targets: targets, moreTargets: !!more, documentId: documentId,
       text: area ? "" : (el.innerText || el.textContent || "").trim().slice(0, 400),

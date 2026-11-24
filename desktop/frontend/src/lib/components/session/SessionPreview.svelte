@@ -22,6 +22,7 @@
   import { store } from "$lib/store.svelte";
   import { confirm } from "$lib/confirm.svelte";
   import { annotationCaption, elementForAgent, feedback, type ElementDraft } from "$lib/feedback.svelte";
+  import { annotationSnapshot } from "$lib/annotationsnapshot";
   import "./annotation-editor.css";
   import { devUrlLabel, loginSite } from "$lib/devurl";
   import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, previewLayout, parsePick, preview, previewIcon, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
@@ -89,13 +90,14 @@
     return key === "c" ? "comment" : tools.find(t => t.key === key)?.id;
   }
   let pendingMark = $state.raw<PreviewMark>();
+  let capturing = $state.raw<PreviewMark>();
   let targets = $state.raw<string[]>([]);
   let moreTargets = $state(false);
   let selectedDraft = $state.raw<ElementDraft>();
   let editSeq = 0;
   let pendingEdit = $state.raw<{ id: number; previous: ElementDraft; mark: PreviewMark }>();
   $effect(() => {
-    if (!pendingEdit) return;
+    if (!pendingEdit || capturing) return;
     const timer = setTimeout(() => {
       pendingEdit = undefined;
       store.setFlash("The page didn’t answer. Try moving the annotation again.", "warn");
@@ -108,6 +110,7 @@
     else pendingMark = drawn;
     frame?.contentWindow?.postMessage({
       target: PICKER_SOURCE, documentId, type: "pick-at", ...point,
+      start: drawn?.kind === "arrow" ? { x: drawn.x + drawn.points[0], y: drawn.y + drawn.points[1] } : undefined,
       editId: pendingEdit?.id, label: drawn?.kind === "text",
       region: drawn?.kind === "area" || drawn?.kind === "pen",
       rect: drawn && { x: drawn.x, y: drawn.y, w: drawn.w, h: drawn.h },
@@ -569,7 +572,7 @@
   }
 
   onMount(() => {
-    const onMessage = (e: MessageEvent) => {
+    const onMessage = async (e: MessageEvent) => {
       // Only the framed page, and only a well-formed pick, ever reaches the form.
       if (!frame || e.source !== frame.contentWindow || !src || e.origin !== frameOrigin) return;
       const d = e.data as { source?: string; type?: string; id?: number; documentId?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown; i?: unknown; failed?: { index?: unknown; step?: unknown; why?: unknown } | null } | null;
@@ -681,17 +684,41 @@
       const editing = editId !== undefined ? pendingEdit : undefined;
       if (editId !== undefined && (!editing || editId !== editing.id || d?.documentId !== documentId)) return;
       if (p && (editing || picking) && active && canComment && !picked) {
-        if (d?.documentId && d.documentId !== documentId) return;
+        if (capturing || (d?.documentId && d.documentId !== documentId)) return;
         const drawn = editing?.mark ?? pendingMark;
-        pendingEdit = undefined;
-        pendingMark = undefined;
         const r = e.data.rect;
         if (!drawn) {
           openEditor(p);
           return;
         }
+        let arrow: PreviewMark["arrow"];
+        const evidence = e.data.arrow;
+        if (drawn.kind === "arrow" && typeof evidence?.tail === "string" && typeof evidence.tip === "string") {
+          arrow = { tail: evidence.tail.slice(0, 650), tip: evidence.tip.slice(0, 650) };
+          if (evidence.embedded === true && req) {
+            const doc = documentId, request = req, root = session?.attachmentRoot || session?.worktree || "";
+            const current = () => active && frame?.isConnected && doc === documentId && req === request &&
+              drawn === (editing ? pendingEdit?.mark : pendingMark);
+            try {
+              flushSync(() => { capturing = drawn; });
+              const jpg = await annotationSnapshot(frame, drawn, layout.scale);
+              if (current()) arrow.snapshot = await PreviewService.SaveAnnotationImage(root, jpg);
+            } catch {
+              if (current()) store.setFlash("Couldn’t attach the marked preview. The arrow still includes its endpoints.", "warn");
+            } finally {
+              capturing = undefined;
+            }
+            if (!current()) {
+              if (pendingMark === drawn) pendingMark = undefined;
+              if (editing && pendingEdit === editing) pendingEdit = undefined;
+              return;
+            }
+          }
+        }
+        pendingEdit = undefined;
+        pendingMark = undefined;
         if (!req || !r || !Number.isFinite(r.x) || !Number.isFinite(r.y)) return;
-        const placed = { ...drawn, ...(drawn.kind === "text" && { page: undefined }), x: drawn.x - r.x, y: drawn.y - r.y };
+        const placed = { ...drawn, arrow, ...(drawn.kind === "text" && { page: undefined }), x: drawn.x - r.x, y: drawn.y - r.y };
         const enclosed = Array.isArray(e.data.targets)
           ? e.data.targets.slice(0, 16).filter((t: unknown) => typeof t === "string").map((t: string) => t.slice(0, 256)) : [];
         if (editing) {
@@ -937,8 +964,11 @@
             {#if picking && commentAvailable}
               {#key tool}<PreviewDrawing {tool} style={layout.style} scale={layout.scale} place={inspect} {hover} cancel={() => tell(false)} />{/key}
             {/if}
+            {#if capturing}
+              <div class="comment-layer" style={layout.style}><DrawnMark mark={capturing} rect={capturing}/></div>
+            {/if}
             {#if (commentRects.length || (picked && mark && bounds)) && !preparing}
-              <div class="comment-layer" class:drawing-active={picking && (tool === "comment" || tool === "text")} style={layout.style}>
+              <div class="comment-layer" class:drawing-active={picking && (tool === "comment" || tool === "text")} style={layout.style} style:opacity={capturing ? 0 : undefined}>
                 {#if editingLabel && mark && labelPosition}
                   <div class="label-entry" style:font-size={(mark.fontSize ?? labelFontSize) + "px"}
                     style:left={labelPosition.x - labelShift.x + "px"}
@@ -987,7 +1017,7 @@
             <p class="text-sm text-faint">Starting preview…</p>
           {/if}
         </div>
-        <div class="preview-actions">
+        <div class="preview-actions" style:visibility={capturing ? "hidden" : undefined}>
         {#if picking && commentAvailable}
           <div class="tool-hint" role="status">
             {tool === "comment" ? "Click an element or drag a rectangle" : tool === "area" ? "Drag to draw a rectangle · Double-click a shape to comment" : tool === "arrow" ? "Drag to draw an arrow · Double-click a shape to comment" : tool === "pen" ? "Drag to draw · Double-click a shape to comment" : "Click to place text · Double-click a label to edit"}

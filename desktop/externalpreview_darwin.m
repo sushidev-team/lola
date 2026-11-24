@@ -94,6 +94,32 @@ static NSArray<NSString *> *observedPageKeys(void) {
         reply(nil, @"Invalid preview tools request."); return;
     }
     NSDictionary *args = msg.body;
+    if ([msg.name isEqual:@"lolaAnnotationSnapshot"]) {
+        // The host computes the crop from its own drawing surface. CSS pixels
+        // differ from view points at non-default Lola window zoom.
+        CGFloat viewport = [args[@"viewport"] doubleValue];
+        CGRect bounds = self.host.bounds;
+        if (!(viewport > 0)) { reply(nil, @"Preview is unavailable."); return; }
+        CGFloat scale = bounds.size.width / viewport;
+        CGRect rect = CGRectMake([args[@"x"] doubleValue] * scale, [args[@"y"] doubleValue] * scale,
+                                 [args[@"w"] doubleValue] * scale, [args[@"h"] doubleValue] * scale);
+        if (CGRectIsEmpty(rect) || !CGRectContainsRect(bounds, rect)) {
+            reply(nil, @"Preview moved during capture."); return;
+        }
+        WKSnapshotConfiguration *config = [WKSnapshotConfiguration new];
+        config.rect = rect;
+        config.snapshotWidth = @(rect.size.width * MIN(1.0, 1600.0 / MAX(rect.size.width, rect.size.height)));
+        [self.host takeSnapshotWithConfiguration:config completionHandler:^(NSImage *image, NSError *error) {
+            CGImageRef pixels = [image CGImageForProposedRect:NULL context:nil hints:nil];
+            if (!pixels || error) { reply(nil, @"Could not capture the marked preview."); return; }
+            NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithCGImage:pixels];
+            NSData *jpg = [rep representationUsingType:NSBitmapImageFileTypeJPEG
+                properties:@{NSImageCompressionFactor:@0.9}];
+            if (!jpg.length || jpg.length > 8*1024*1024) { reply(nil, @"Preview image is unavailable."); return; }
+            reply([jpg base64EncodedStringWithOptions:0], nil);
+        }];
+        return;
+    }
     NSString *token = args[@"token"];
     WKWebView *page = self.tabs[args[@"id"]];
     if (![token isKindOfClass:NSString.class] || ![[NSUUID alloc] initWithUUIDString:token] || !page) {
@@ -174,6 +200,7 @@ void lolaInstallExternalPreview(WKWebView *host, NSString *debugSource) {
     LolaExternalPreview *browser = [LolaExternalPreview new];
     browser.host = host;
     browser.debugSource = debugSource;
+    [host.configuration.userContentController addScriptMessageHandlerWithReply:browser contentWorld:WKContentWorld.pageWorld name:@"lolaAnnotationSnapshot"];
     [host.configuration.userContentController addScriptMessageHandlerWithReply:browser contentWorld:WKContentWorld.pageWorld name:@"lolaPreviewTools"];
     browser.tabs = [NSMutableDictionary new];
     [host.configuration.userContentController addScriptMessageHandler:browser name:@"lolaExternalPreview"];

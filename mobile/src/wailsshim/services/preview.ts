@@ -33,7 +33,12 @@ export function AutoTestLogin(..._args: Parameters<typeof Gen.PreviewService.Aut
   return unsupported("PreviewService.AutoTestLogin", MAC_ONLY);
 }
 
+export function SaveAnnotationImage(..._args: Parameters<typeof Gen.PreviewService.SaveAnnotationImage>): Promise<string> {
+  return unsupported("PreviewService.SaveAnnotationImage", MAC_ONLY);
+}
+
 export const ROUTES: Routes<typeof Gen.PreviewService> = {
+  SaveAnnotationImage: { kind: "platform", reason: MAC_ONLY },
   AutoTestLogin: { kind: "platform", reason: MAC_ONLY },
   SetAutoLogin: { kind: "platform", reason: MAC_ONLY },
   TestLogins: { kind: "platform", reason: MAC_ONLY },

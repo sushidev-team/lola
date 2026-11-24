@@ -209,6 +209,45 @@ it('highlights a clicked element and reports only enclosed visible targets for a
   } finally { frame.remove(); vi.restoreAllMocks(); }
 });
 
+it('reports the row at the arrow tail separately from the embedded document at the tip, including on a move', () => {
+  const frame = document.createElement('iframe');
+  document.body.appendChild(frame);
+  const child = frame.contentWindow!, doc = child.document;
+  const post = vi.spyOn(child.parent, 'postMessage').mockImplementation(() => {});
+  try {
+    doc.body.innerHTML = '<table><tr><td>5.1</td><td id="phase">PPH 1 Projektvorbereitung</td></tr></table><iframe id="proposal" sandbox srcdoc="Gesamtbetrag netto"></iframe>';
+    const phase = doc.getElementById('phase')!, proposal = doc.getElementById('proposal')!;
+    Object.defineProperty(phase.parentElement!, 'innerText', { value: '5.1\tPPH 1 Projektvorbereitung' });
+    const hit = vi.fn((x: number, y: number) => x === 290 && y === 75 ? phase : proposal);
+    Object.defineProperty(doc, 'elementFromPoint', { value: hit });
+    new Function('window', 'document', script)(child, doc);
+    const documentId = post.mock.calls[0][0].documentId;
+    const send = (m: object) => child.dispatchEvent(new MessageEvent('message', {
+      source: child.parent, data: { target: 'lola-preview', documentId, ...m },
+    }));
+    const pick = (coords: object) => {
+      send({ type: 'pick-at', rect: {x: 50, y: 75, w: 240, h: 50}, ...coords });
+      return post.mock.calls.map(([m]) => m).findLast(m => m.type === 'pick');
+    };
+    send({ type: 'pick', on: true, tool: 'arrow' });
+    const first = pick({start:{x:290,y:75}, x:50,y:125});
+    expect(first).toMatchObject({ selector: 'iframe#proposal', html: '', arrow: {
+      embedded: true, tail: 'td#phase — 5.1 PPH 1 Projektvorbereitung', tip: 'iframe#proposal (embedded content at this point)',
+    }});
+    expect(JSON.stringify(first)).not.toContain('Gesamtbetrag');
+    const moved = pick({ editId: 1, start:{x:50,y:125}, x:290,y:75 });
+    expect(moved).toMatchObject({ selector: 'td#phase', editId: 1, arrow: { tip: first.arrow.tail, tail: first.arrow.tip } });
+
+    // Deep wrappers repeat when the app renders two copies of a proposal.
+    const segment = '<section><div><div><div><div><div><iframe sandbox></iframe></div></div></div></div></div></section>';
+    doc.body.innerHTML = segment + segment;
+    const second = doc.querySelectorAll('iframe')[1];
+    hit.mockReturnValue(second);
+    const repeated = pick({ editId: 2, start:{x:20,y:80}, x:80,y:90 });
+    expect(Array.from(doc.querySelectorAll(repeated.selector))).toEqual([second]);
+  } finally { frame.remove(); vi.restoreAllMocks(); }
+});
+
 it('positions labels against the site without highlighting or collecting element contents', () => {
   const frame = document.createElement('iframe');
   document.body.appendChild(frame);

@@ -48,11 +48,12 @@ export function elementForAgent({ reviewKey, images, mark, targets, moreTargets,
     if (targets?.length) element.annotation += "\nEnclosed elements:\n" + targets.join("\n");
     if (moreTargets) element.annotation += "\nAdditional elements omitted.";
   }
+  if (mark?.arrow?.snapshot) images = [mark.arrow.snapshot, ...(images ?? [])];
   if (!element.note && mark && !images?.length) {
     return { ...element, note: annotationCaption({ ...element, mark }) };
   }
   if (!images?.length) return element;
-  const note = [element.note, ...images].filter(Boolean).join("\n");
+  const note = [element.note || (mark?.arrow?.snapshot ? "See the marked preview." : ""), ...images].filter(Boolean).join("\n");
   // renderFeedbackElement clips at feedbackMaxBodyRunes. Never truncate a path.
   if (Array.from(note).length > 4000) throw new Error("Send these images in smaller batches so each attachment reaches the agent.");
   return { ...element, note };

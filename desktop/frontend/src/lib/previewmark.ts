@@ -5,7 +5,9 @@ export type Point = { x: number; y: number };
 export type Rect = Point & { w: number; h: number };
 // While drawing, x/y are frame coordinates. Saved marks use the same CSS
 // pixels, relative to the DOM anchor. Stroke points are local to the mark.
-export type PreviewMark = Rect & { kind: "area" | "arrow" | "pen" | "text"; points: number[]; label?: string; fontSize?: number; page?: boolean };
+export type PreviewMark = Rect & { kind: "area" | "arrow" | "pen" | "text"; points: number[]; label?: string; fontSize?: number; page?: boolean;
+  arrow?: { tail: string; tip: string; snapshot?: string };
+};
 
 export function makeMark(tool: PreviewTool, path: number[]): PreviewMark {
   const points = simplifyStroke(path, 96);
@@ -51,6 +53,9 @@ export function describeMark(mark: PreviewMark, selector: string): string {
     const points = [];
     for (let i = 0; i < mark.points.length; i += 2) points.push(`(${mark.x + mark.points[i]},${mark.y + mark.points[i + 1]})`);
     text += " Path relative to anchor: " + points.join(" ");
+  }
+  if (mark.kind === "arrow" && mark.arrow) {
+    text += "\nArrow starts at: " + mark.arrow.tail + "\nArrow points to: " + mark.arrow.tip;
   }
   return text;
 }

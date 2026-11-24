@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -23,6 +24,23 @@ func imageWorktree(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return wt
+}
+
+func TestMarkedPreviewCanBeReadAsASessionAttachment(t *testing.T) {
+	root := imageWorktree(t)
+	svc := &PreviewService{}
+	head := base64.StdEncoding.EncodeToString([]byte{0xff, 0xd8, 0xff, 0xe0})
+	path, err := svc.SaveAnnotationImage(root, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := (&TalkService{}).ReadAttachmentImage(root, path)
+	if err != nil || image != "data:image/jpeg;base64,"+head {
+		t.Fatalf("read marked preview: %q, %v", image, err)
+	}
+	if _, err := svc.SaveAnnotationImage(root, base64.StdEncoding.EncodeToString(pngHead)); err == nil {
+		t.Fatal("accepted an unexpected image type")
+	}
 }
 
 func TestAttachImageFileCopiesIntoTheSession(t *testing.T) {

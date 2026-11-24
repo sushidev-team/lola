@@ -44,7 +44,9 @@ export function parsePick(data: unknown): PickedElement | null {
   if (!data || typeof data !== "object") return null;
   const d = data as Record<string, unknown>;
   if (d.source !== PICKER_SOURCE || d.type !== "pick") return null;
-  const selector = clip(d.selector, 300).trim();
+  // A positional path through repeated rows can exceed the agent's display
+  // limit. Keep the complete anchor locally so tracking finds the picked row.
+  const selector = typeof d.selector === "string" && d.selector.length <= 4096 ? d.selector.trim() : "";
   if (!selector) return null;
   return { url: clip(d.url, 600), selector, tag: clip(d.tag, 40), html: clip(d.html, 6000), text: clip(d.text, 400) };
 }

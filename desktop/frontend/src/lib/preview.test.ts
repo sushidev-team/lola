@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { annotationCrop } from "./annotationsnapshot";
 import { MAX_PREVIEW_TABS, VIEWPORTS, devPageURL, previewLayout, parsePick, preview, previewAddress, previewIcon } from "./preview.svelte";
 
 it("loads page icons through the preview origin and falls back to the site's conventional icon", () => {
@@ -35,6 +36,12 @@ it("fits the live viewport into the stage while keeping desktop responsive", () 
   expect(previewLayout(mobile, 600, 900).style).toBe("width:390px;height:844px");
   expect(previewLayout(mobile, 600, 422).scale).toBe(0.5);
   expect(previewLayout(tablet, 410, 900).scale).toBe(0.5);
+});
+
+it("crops a scaled arrow around its endpoints within the visible preview", () => {
+  const frame = new DOMRect(80, 20, 400, 600);
+  expect(annotationCrop(frame, { x: 140, y: 32, w: 300, h: 120 }, 0.5, 420, 400))
+    .toEqual({ x: 80, y: 20, w: 340, h: 108 });
 });
 
 it("names the page on the dev server's origin, not the proxy's", () => {

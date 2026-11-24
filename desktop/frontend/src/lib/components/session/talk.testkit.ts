@@ -32,7 +32,7 @@ const sshSvc = vi.hoisted(() => ({
 vi.mock("@bindings/desktop", () => ({
   TalkService: talkSvc,
   SSHService: sshSvc,
-  PreviewService: { Open: vi.fn() },
+  PreviewService: { Open: vi.fn(), SaveAnnotationImage: vi.fn() },
   DaemonService: { Alive: vi.fn().mockResolvedValue(true), SessionTask: vi.fn(), PRReadiness: vi.fn().mockRejectedValue(new Error("GitHub unavailable")), AddressPRFeedback: vi.fn(), MergePR: vi.fn(), ReviewPackages:vi.fn(), ReviewPackageImage:vi.fn(), ReviewPackageMark:vi.fn(), ReviewPackageDiff:vi.fn(), ReviewPackageChecks:vi.fn().mockResolvedValue({checks:[]}), ReviewPackageVerify:vi.fn(), ReviewPackageCapture:vi.fn(), ReviewPackageRecover:vi.fn(), SendFeedback:vi.fn() },
   ConfigService: {},
   TermService: { Shells: vi.fn().mockResolvedValue([]) },

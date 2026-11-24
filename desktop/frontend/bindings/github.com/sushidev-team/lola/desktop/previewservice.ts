@@ -40,6 +40,13 @@ export function RemoveTestLogin(session: string, url: string, project: string, n
     return $Call.ByID(3556264030, session, url, project, name);
 }
 
+/**
+ * SaveAnnotationImage stores the cropped WebKit snapshot with the session's other attachments.
+ */
+export function SaveAnnotationImage(worktree: string, encoded: string): $CancellablePromise<string> {
+    return $Call.ByID(2962026070, worktree, encoded);
+}
+
 export function SaveTestLogin(session: string, url: string, project: string, profile: devlogin$0.Profile, password: string, editing: boolean): $CancellablePromise<void> {
     return $Call.ByID(725504077, session, url, project, profile, password, editing);
 }
