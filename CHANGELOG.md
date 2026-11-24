@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.19.0](https://github.com/sushidev-team/lola/compare/v0.18.0...v0.19.0) (2026-11-24)
+
+
+### Features
+
+* **desktop:** add Linear agent assignment and hub claim status bindings ([c65b7c5](https://github.com/sushidev-team/lola/commit/c65b7c5d51ba1d22f906c39dc72462d3d8009524))
+* **preview:** add docked developer tools, saved pages, and image comments ([dadcf7f](https://github.com/sushidev-team/lola/commit/dadcf7f7483a10fb8df99f17d66f5813ad765371))
+* **preview:** add editable annotations and batched feedback ([d9e3f5d](https://github.com/sushidev-team/lola/commit/d9e3f5d0bc87b3e74890a434cb666a4d10865104))
+* **preview:** edit CSS in place and show matching DOM end tags ([6a1d486](https://github.com/sushidev-team/lola/commit/6a1d4863c0f5cbedd70d4db90f2806b2f6fee100))
+
+
+### Bug Fixes
+
+* **desktop:** scroll to the current branch tip after pulling ([3697779](https://github.com/sushidev-team/lola/commit/3697779c07f7b1382c19e61dc03b05ce126b441a))
+* **preview:** keep auto-login across dev port changes ([fa8de15](https://github.com/sushidev-team/lola/commit/fa8de15c7fcb4f7a75191172901f35f6dfc139fb))
+* **preview:** preserve both endpoints in arrow feedback ([f8a4b9b](https://github.com/sushidev-team/lola/commit/f8a4b9b50c70932cf9936a64b395c39d2e1b594f))
+* **preview:** restore DOM wrap toggle and remove row tooltips ([5d50608](https://github.com/sushidev-team/lola/commit/5d50608d83729b5f3d4b850bc06e467ec5f1a97c))
+* **projectgit:** order branch history by author date ([9f446a5](https://github.com/sushidev-team/lola/commit/9f446a54f3caffde41543f6a8a2a339913a48493))
+* support image attachments in borrowed checkouts ([78b2322](https://github.com/sushidev-team/lola/commit/78b23222d94e7c2c6a6c48417b60e04c1635769b))
+
 ## [0.18.0](https://github.com/sushidev-team/lola/compare/v0.17.1...v0.18.0) (2026-11-24)
 
 
