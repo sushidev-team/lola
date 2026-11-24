@@ -138,14 +138,15 @@ describe('Project Git workspace', () => {
     api.Commit.mockImplementation(async () => { committed = true; });
     api.BranchAction.mockImplementation(async () => { committed = true; return {path:'/repo-feature'}; });
     await open();
-    await fireEvent.click(screen.getByRole('button', {name:/Working changes on feature, 1 file, worktree/}));
+    await fireEvent.click(screen.getByRole('button', {name:/Worktree changes on feature, 1 file, worktree/}));
     await screen.findByRole('group', {name:'Worktree feature'});
     await waitFor(() => expect(screen.getByLabelText('Commit subject')).toBeEnabled());
     await fireEvent.input(screen.getByLabelText('Commit subject'), {target:{value:'New worktree commit'}});
+    api.Snapshot.mockClear();
     await fireEvent.submit(screen.getByLabelText('Commit subject').closest('form')!);
     expect(await screen.findByRole('button', {name:/New worktree commit,/})).toBeVisible();
-    expect(screen.queryByRole('button', {name:/Working changes on feature,/})).toBeNull();
-    expect(api.Snapshot).toHaveBeenLastCalledWith(project, '', '', 200);
+    expect(screen.queryByRole('button', {name:/Worktree changes on feature,/})).toBeNull();
+    expect(api.Snapshot).toHaveBeenCalledWith(project, '', '', 200);
     expect(screen.getByRole('group', {name:'Worktree feature'})).toBeVisible();
   });
   it('shows work in progress of another worktree above its commit, split by kind', async () => {
@@ -153,7 +154,7 @@ describe('Project Git workspace', () => {
     Object.assign(data.worktrees[1], { changes: 6, modified: 3, added: 2, deleted: 1 });
     api.Snapshot.mockResolvedValue(data);
     await open();
-    const row = screen.getByRole('button', { name: /Working changes on feature, 6 files, worktree/ });
+    const row = screen.getByRole('button', { name: /Worktree changes on feature, 6 files, worktree/ });
     expect(row).toHaveAttribute('data-worktree-changes', '/repo-feature');
     // Above the commit that checkout sits on, below the newer one.
     const rows = Array.from(document.querySelectorAll('.history-list .commit-row'));
@@ -170,10 +171,11 @@ describe('Project Git workspace', () => {
     const other = snapshot({ path: '/repo-feature', branch: 'feature', head: oldSHA, files: [{ path: 'peeked.ts', oldPath: '', index: ' ', worktree: 'M', untracked: false, conflict: false }] });
     api.Snapshot.mockImplementation(async (_project: string, worktree: string) => worktree === '/repo-feature' ? other : data);
     await open();
-    const row = screen.getByRole('button', { name: /Working changes on feature, 1 file, worktree/ });
+    const row = screen.getByRole('button', { name: /Worktree changes on feature, 1 file, worktree/ });
     await fireEvent.click(row);
     await waitFor(() => expect(api.Snapshot).toHaveBeenCalledWith(project, '/repo-feature', '', 1));
     const heading = await screen.findByRole('group', { name: 'Worktree feature' });
+    expect(heading).toHaveTextContent('Worktree · feature');
     expect(row).toHaveAttribute('aria-pressed', 'true');
     // The history is still this checkout's.
     expect(screen.getByRole('button', { name: /Add project workspace,/ })).toBeVisible();
@@ -181,6 +183,14 @@ describe('Project Git workspace', () => {
     const inspector = screen.getByRole('complementary');
     await waitFor(() => expect(within(inspector).getByText(/peeked\.ts/)).toBeVisible());
     expect(within(inspector).queryByText(/new\.ts/)).toBeNull();
+    // Another process changed which file is dirty while the count stayed at one.
+    const updated = {...other, files: [{...other.files[0], path: 'replacement.ts'}]};
+    api.Snapshot.mockImplementation(async (_project: string, worktree: string) =>
+      worktree === '/repo-feature' ? updated : structuredClone(data));
+    await refreshRepository();
+    const unstaged = within(inspector).getByRole('region', { name: 'Unstaged files' });
+    expect(await within(unstaged).findByRole('button', {name: 'Inspect unstaged replacement.ts'})).toBeVisible();
+    expect(within(inspector).queryByText(/peeked\.ts/)).toBeNull();
     // Back to this checkout's own changes.
     await fireEvent.click(within(heading).getByRole('button', { name: "Back to this checkout's changes" }));
     await waitFor(() => expect(within(screen.getByRole('complementary')).getByText(/new\.ts/)).toBeVisible());

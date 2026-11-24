@@ -432,9 +432,18 @@
     return () => { disposed = true; clearInterval(timer); document.removeEventListener('visibilitychange', fetchIfVisible); window.removeEventListener('focus', fetchIfVisible); };
   });
 
+  let lastPeek: typeof peek = null;
   $effect(() => {
-    const state = peek;
-    untrack(() => { if (state) { state.clearDiff(); void state.load('', 1); } });
+    const state = peek, tree = peekTree;
+    const reopening = state !== lastPeek;
+    lastPeek = state;
+    if (!state || !tree || tree.prunable || tree.blocked) return;
+    // Each fresh graph snapshot supplies a new tree, even if the file count
+    // stayed the same while the files themselves changed.
+    untrack(() => {
+      if (reopening) state.clearDiff();
+      void state.load('', 1, !reopening);
+    });
   });
   // A peeked checkout that was removed or turned managed has nothing to show.
   $effect(() => { if (peekPath && data && (!peekTree || peekTree.blocked || peekTree.prunable)) peekPath = ''; });
@@ -519,8 +528,6 @@
     const timer = setTimeout(() => untrack(() => {
       if (!active || !data) return;
       if (!git.loading && !git.busy) void git.load(ref, limit, true);
-      // The inspector reads the peeked checkout's own state, which the line above does not touch.
-      if (peek && !peek.loading && !peek.busy) void peek.load('', 1, true);
     }), 450);
     return () => clearTimeout(timer);
   });
@@ -812,7 +819,7 @@
               {#each wip as change, wipIndex (change.tree.path)}
                 {@const wipX = GRAPH_NODE_X + change.lane * GRAPH_LANE_WIDTH}
                 {@const where = change.tree.branch || 'detached HEAD'}
-                <Button block variant="bare" selected={peekPath === change.tree.path && !selected.length} class="commit-row worktree-wip-row" data-worktree-changes={change.tree.path} title={`Uncommitted changes in ${change.tree.path}`} aria-label={`Working changes on ${where}, ${change.tree.changes} ${change.tree.changes === 1 ? 'file' : 'files'}, worktree`} ondblclick={() => openWorktreeChanges(change.tree)} onclick={() => peekWorktree(change.tree)}>
+                <Button block variant="bare" selected={peekPath === change.tree.path && !selected.length} class="commit-row worktree-wip-row" data-worktree-changes={change.tree.path} title={`Uncommitted changes in ${change.tree.path}`} aria-label={`Worktree changes on ${where}, ${change.tree.changes} ${change.tree.changes === 1 ? 'file' : 'files'}, worktree`} ondblclick={() => openWorktreeChanges(change.tree)} onclick={() => peekWorktree(change.tree)}>
                   {#each shownColumns as column}
                     {#if column.id === 'refs'}<span class="working-state"><span class="wip-label wip-elsewhere"><Icon name="layers" size={12} /><span class="ref-name">{where}</span></span></span>
                     {:else if column.id === 'graph'}<span class="graph-cell wip-graph"><svg class="commit-graph" width={graphWidth} height={rowHeight} aria-hidden="true">
@@ -822,7 +829,7 @@
                       <path class="worktree-edge" d={`M${wipX} ${rowHeight / 2 + 9}V${rowHeight}`} stroke="currentColor" stroke-width="1.7" fill="none" />
                       <circle cx={wipX} cy={rowHeight / 2} r="9" fill="var(--color-canvas)" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.5" /><circle cx={wipX} cy={rowHeight / 2} r="2.5" fill="currentColor" />
                     </svg></span>
-                    {:else if column.id === 'subject'}<span class="working-copy"><strong>Working changes</strong><span class="working-count">{change.tree.changes}</span><span class="working-stats">{#if change.tree.modified}<span class="working-stat modified" title={`${change.tree.modified} modified files`}><Icon name="pencil" size={12} />{change.tree.modified}</span>{/if}{#if change.tree.added}<span class="working-stat added" title={`${change.tree.added} added files`}><Icon name="plus" size={12} />{change.tree.added}</span>{/if}{#if change.tree.deleted}<span class="working-stat deleted" title={`${change.tree.deleted} deleted files`}><Icon name="minus" size={12} />{change.tree.deleted}</span>{/if}{#if change.tree.conflicts}<span class="working-stat deleted" title={`${change.tree.conflicts} conflicted files`}><Icon name="circle-alert" size={12} />{change.tree.conflicts}</span>{/if}</span><span class="working-open">Review changes<Icon name="chevron-right" size={13} /></span></span>
+                    {:else if column.id === 'subject'}<span class="working-copy"><strong>Worktree changes</strong><span class="working-count">{change.tree.changes}</span><span class="working-stats">{#if change.tree.modified}<span class="working-stat modified" title={`${change.tree.modified} modified files`}><Icon name="pencil" size={12} />{change.tree.modified}</span>{/if}{#if change.tree.added}<span class="working-stat added" title={`${change.tree.added} added files`}><Icon name="plus" size={12} />{change.tree.added}</span>{/if}{#if change.tree.deleted}<span class="working-stat deleted" title={`${change.tree.deleted} deleted files`}><Icon name="minus" size={12} />{change.tree.deleted}</span>{/if}{#if change.tree.conflicts}<span class="working-stat deleted" title={`${change.tree.conflicts} conflicted files`}><Icon name="circle-alert" size={12} />{change.tree.conflicts}</span>{/if}</span><span class="working-open">Review changes<Icon name="chevron-right" size={13} /></span></span>
                     {:else}<span></span>{/if}
                   {/each}
                 </Button>
@@ -957,7 +964,7 @@
         {#if peek && peekTree}
           {@const tree = peekTree}
           <div class="peek-heading" role="group" aria-label={`Worktree ${tree.branch || 'detached HEAD'}`}>
-            <Icon name="layers" size={14} /><span class="peek-copy" title={tree.path}><strong>{tree.branch || 'Detached HEAD'}</strong><small>{tree.path}</small></span>
+            <Icon name="layers" size={14} /><span class="peek-copy" title={tree.path}><strong>Worktree · {tree.branch || 'Detached HEAD'}</strong><small>{tree.path}</small></span>
             <Button size="xs" variant="secondary" title="Switch the whole view to this worktree" onclick={() => openWorktreeChanges(tree)}>Open</Button>
             <Button icon size="xs" aria-label="Back to this checkout's changes" title="Back to this checkout's changes" onclick={ownWorking}><Icon name="x" size={14} /></Button>
           </div>
@@ -1095,6 +1102,7 @@
   .wip-graph { color:var(--color-orange); background:none; border-right-color:transparent; }
   .history-list :global(.commit-row.worktree-wip-row[aria-pressed="true"]) { background:color-mix(in srgb,var(--color-orange) 20%,var(--color-panel)); }
   .peek-heading { display:flex; align-items:center; gap:8px; min-height:41px; padding:6px 8px 6px 12px; border-bottom:1px solid var(--color-edge); background:color-mix(in srgb,var(--color-orange) 8%,var(--color-panel)); color:var(--color-orange); }
+  .peek-heading + :global(.staging-panel) { grid-row:2 / -1; }
   .peek-copy { display:grid; min-width:0; flex:1; color:var(--color-ink); }
   .peek-copy strong { font-size:13px; font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .peek-copy small { color:var(--color-faint); font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; direction:rtl; text-align:left; }
