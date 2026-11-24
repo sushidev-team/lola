@@ -251,6 +251,35 @@ func TestInstalledGitCreatesSSHSignature(t *testing.T) {
 	}
 }
 
+func TestHistoryInterleavesBranchesByAuthorDate(t *testing.T) {
+	dir := repo(t)
+	commit := func(subject string, authorDay, committerDay int) {
+		t.Helper()
+		t.Setenv("GIT_AUTHOR_DATE", fmt.Sprintf("2025-01-%02dT12:00:00Z", authorDay))
+		t.Setenv("GIT_COMMITTER_DATE", fmt.Sprintf("2025-01-%02dT12:00:00Z", committerDay))
+		testGit(t, dir, "commit", "--allow-empty", "-m", subject)
+	}
+	// A shared parent with a newer author date must still follow its children.
+	commit("base", 5, 1)
+	testGit(t, dir, "branch", "live")
+	commit("older feature work", 1, 3)
+	commit("feature tip", 4, 4)
+	testGit(t, dir, "switch", "live")
+	commit("live tip", 3, 2)
+
+	s, err := (Client{}).Snapshot(context.Background(), dir, "", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var subjects []string
+	for _, c := range s.Commits {
+		subjects = append(subjects, c.Subject)
+	}
+	if want := []string{"feature tip", "live tip", "older feature work", "base"}; !reflect.DeepEqual(subjects, want) {
+		t.Fatalf("history order = %v, want %v", subjects, want)
+	}
+}
+
 func TestHistoryOmitsPrivateCheckpointRefs(t *testing.T) {
 	dir := repo(t)
 	write(t, dir, "a", "main")

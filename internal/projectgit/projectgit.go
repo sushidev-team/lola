@@ -329,7 +329,7 @@ func (c Client) Snapshot(ctx context.Context, dir, ref string, limit int) (Snaps
 	if s.Head == "" && len(s.Refs) == 0 {
 		return s, nil
 	}
-	args := []string{"log", "--topo-order", "-z", "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI", "-n", strconv.Itoa(limit + 1)}
+	args := []string{"log", "--author-date-order", "-z", "--format=%H%x00%P%x00%s%x00%an%x00%ae%x00%aI", "-n", strconv.Itoa(limit + 1)}
 	if ref == "" {
 		args = append(args, "--branches", "--remotes", "--tags")
 		if s.Head != "" {
