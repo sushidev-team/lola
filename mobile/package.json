@@ -35,7 +35,7 @@
     "lola-transport": "file:./plugins/lola-transport"
   },
   "devDependencies": {
-    "@capacitor/cli": "^8.5.0",
+    "@capacitor/cli": "^8.6.2",
     "@capacitor/ios": "^8.6.2",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tailwindcss/vite": "^4.1.0",
