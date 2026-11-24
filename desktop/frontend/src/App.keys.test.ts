@@ -345,6 +345,14 @@ describe("in a session", () => {
     try {
       await screen.findByRole("dialog", { name: "Preview" });
       preview.tabs[0].currentURL = root + "/billing#details";
+      chord("ssh-talk");
+      const address = await screen.findByRole("textbox", { name: "Preview address" }) as HTMLInputElement;
+      expect(address).toHaveValue(root + "/billing#details");
+      expect(address).toHaveFocus();
+      await waitFor(() => expect(address.selectionEnd! - address.selectionStart!).toBe(address.value.length));
+      await press("Escape", address);
+      expect(screen.queryByRole("dialog", { name: "Open address" })).toBeNull();
+      expect(preview.visible).toBe(true);
       chord("preview-duplicate");
       expect(preview.request).toMatchObject({ url: root + "/billing#details", prep: { device: "mobile" } });
       expect(preview.request?.prep?.steps).toBeUndefined();

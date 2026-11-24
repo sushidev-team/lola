@@ -77,7 +77,7 @@ it("keeps one address twice when it is prepared for two different areas, and car
   preview.close();
 });
 
-it("resolves testing routes and pasted addresses on the session's advertised origins", () => {
+it("resolves page paths, bare websites and advertised dev servers in the address bar", () => {
   const servers = ["https://shop.test", "http://localhost:8000/app"];
   const page = "https://shop.test/cp/users?sort=name";
   for (const [typed, resolved] of [
@@ -87,9 +87,14 @@ it("resolves testing routes and pasted addresses on the session's advertised ori
     ["#roles", page + "#roles"],
     ["shop.test/cp", "https://shop.test/cp"],
     [" localhost:8000/login ", "http://localhost:8000/login"],
+    ["sushi.dev", "https://sushi.dev/"],
+    ["sushi.dev/work?q=1#team", "https://sushi.dev/work?q=1#team"],
+    ["//other.test", "https://other.test/"],
+    ["http://localhost:3000/cp", "http://localhost:3000/cp"],
+    ["localhost:4173", "http://localhost:4173/"],
   ]) expect(previewAddress(typed, page, servers)).toBe(resolved);
-  for (const typed of ["", "other.test/cp", "//other.test", "http://localhost:3000/cp", "https://name@shop.test", "file:///tmp/test", "javascript:alert(1)"]) {
+  for (const typed of ["", "https://name@shop.test", "file:///tmp/test", "javascript:alert(1)"]) {
     expect(previewAddress(typed, page, servers)).toBeUndefined();
   }
-  expect(previewAddress("/cp", page, [])).toBeUndefined();
+  expect(previewAddress("/cp", page, [])).toBe("https://shop.test/cp");
 });

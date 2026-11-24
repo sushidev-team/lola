@@ -114,6 +114,7 @@ it('groups stack links by display name and keeps legacy links accessible', async
   render(PreviewWorkspace);
   try {
     await fireEvent.click(within(screen.getByRole('list', { name: 'Catalog API' })).getByRole('button', { name: /8000/ }));
+    await fireEvent.click(await screen.findByRole('button', { name: 'Edit preview address' }));
     const servers = within(await screen.findByRole('navigation', { name: 'Dev servers' }));
     const api = within(servers.getByRole('group', { name: 'Catalog API' }));
     expect(api.getByRole('button', { name: 'Open localhost:8000 in a new tab' })).not.toHaveAttribute('aria-pressed', 'true');
@@ -121,9 +122,9 @@ it('groups stack links by display name and keeps legacy links accessible', async
     const site = within(servers.getByRole('group', { name: 'Storefront' }));
     expect(servers.getAllByRole('heading', { name: 'Storefront' })).toHaveLength(1);
     expect(site.getAllByRole('button')).toHaveLength(2);
+    expect(within(servers.getByRole('group', { name: 'Other addresses' })).getByRole('button', { name: 'Open localhost:9191 in a new tab' })).toBeInTheDocument();
     await fireEvent.click(site.getByRole('button', { name: 'Open localhost:20007 in a new tab' }));
     expect(open).toHaveBeenLastCalledWith(id, 'http://localhost:20007');
-    expect(within(servers.getByRole('group', { name: 'Other addresses' })).getByRole('button', { name: 'Open localhost:9191 in a new tab' })).toBeInTheDocument();
     expect(external).not.toHaveBeenCalled();
     await fireEvent.click(screen.getByRole('button', { name: 'Open in external browser' }));
     expect(external).toHaveBeenCalledWith('http://localhost:20007');
@@ -439,6 +440,7 @@ it('keeps duplicate pages live and targets toolbar actions at the selected route
     expect(icon).toHaveAttribute('src', origin + '/brand.svg');
     await fireEvent.error(icon);
     expect(billingTab.querySelector('img')).toBeNull();
+    await fireEvent.click(screen.getByRole('button', { name: 'Edit preview address' }));
     const add = screen.getByRole('button', { name: 'Open localhost:20000 in a new tab' });
     expect(add).toHaveTextContent(/^localhost:20000$/);
     await fireEvent.click(add);
@@ -480,6 +482,74 @@ it('keeps duplicate pages live and targets toolbar actions at the selected route
     vi.unstubAllGlobals();
     external.mockRestore();
     preview.close();
+  }
+});
+
+it('navigates to /cp in place, follows the sign-in redirect, and switches stack origins', async () => {
+  const site = 'https://shop.test', api = 'http://localhost:8000';
+  const id = freshSession({ apps: [{ name: 'site', devUrls: [site] }, { name: 'api', devUrls: [api] }] });
+  const proxy = 'http://preview.localhost:5555';
+  const open = vi.mocked(PreviewService.Open).mockClear().mockImplementation((_, url) => {
+    const { pathname, search, hash } = new URL(url);
+    return Promise.resolve(proxy + pathname + search + hash) as ReturnType<typeof PreviewService.Open>;
+  });
+  render(PreviewWorkspace);
+  preview.open(id, site, { prep: { steps: [{ do: 'click', text: 'Prepare' }] } });
+  const edit = () => fireEvent.click(screen.getByRole('button', { name: 'Edit preview address' }));
+  const submit = async (value: string) => {
+    const input = screen.getByRole('textbox', { name: 'Preview address' });
+    await fireEvent.input(input, { target: { value } });
+    await fireEvent.click(screen.getByRole('button', { name: 'Go' }));
+  };
+  try {
+    const original = await screen.findByTitle('Preview of shop.test');
+    await edit();
+    await submit('file:///tmp/example');
+    expect(await screen.findByRole('alert')).toHaveTextContent('website address');
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(original).toBeInTheDocument();
+
+    await submit('/cp');
+    await waitFor(() => expect(document.querySelector('iframe')).toHaveAttribute('src', proxy + '/cp'));
+    const frame = document.querySelector('iframe')!;
+    const post = vi.spyOn(frame.contentWindow!, 'postMessage');
+    await fireEvent(window, new MessageEvent('message', { source: frame.contentWindow, origin: proxy,
+      data: { source: 'lola-preview', type: 'ready', documentId: 'login', url: proxy + '/cp/auth/login' },
+    }));
+    expect(post.mock.calls.some(([data]) => data.type === 'prepare')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Edit preview address' })).toHaveTextContent(site + '/cp/auth/login');
+    await fireEvent.click(screen.getByRole('button', { name: 'Mobile' }));
+
+    await edit();
+    await submit('localhost:8000/status?debug=1#health');
+    expect(preview.tabs).toHaveLength(1);
+    expect(open).toHaveBeenLastCalledWith(id, api + '/status?debug=1#health');
+    expect(preview.request).toMatchObject({ url: api + '/status?debug=1#health', prep: { device: 'mobile' } });
+    expect(preview.request?.prep?.steps).toBeUndefined();
+    expect(await screen.findByTitle('Preview of localhost:8000/status?debug=1#health')).toHaveStyle({ width: '390px' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(open).toHaveBeenLastCalledWith(id, site + '/cp/auth/login');
+    await fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(open).toHaveBeenLastCalledWith(id, site);
+    expect(screen.getByRole('button', { name: 'Back' })).toBeDisabled();
+
+    const postMessage = vi.fn();
+    vi.stubGlobal('webkit', { messageHandlers: { lolaExternalPreview: { postMessage } } });
+    const tab = preview.tabs[preview.active];
+    await edit();
+    await submit('sushi.dev');
+    expect(preview.tabs).toHaveLength(1);
+    expect(postMessage).toHaveBeenCalledWith({ action: 'load', id: tab.id, url: 'https://sushi.dev/' });
+    await edit();
+    await submit('example.org/docs');
+    expect(postMessage).toHaveBeenCalledWith({ action: 'load', id: tab.id, url: 'https://example.org/docs' });
+    await edit();
+    await submit('localhost:8000/login');
+    expect(open).toHaveBeenLastCalledWith(id, api + '/login');
+    expect(preview.request?.external).toBeFalsy();
+  } finally {
+    preview.close();
+    vi.unstubAllGlobals();
   }
 });
 

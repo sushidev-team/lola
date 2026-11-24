@@ -85,8 +85,8 @@ export function previewIcon(declared: unknown, page: string, upstream = page): s
   return fallback;
 }
 
-/** Resolve a typed route against the displayed page. A bare advertised host
- * inherits its server's scheme. Open() rechecks ownership with the daemon. */
+/** Paths use the displayed page; bare websites default to HTTPS, and known
+ * servers keep the scheme they advertised. */
 export function previewAddress(input: string, current: string, servers: string[]): string | undefined {
   const raw = input.trim();
   if (!raw) return;
@@ -98,11 +98,26 @@ export function previewAddress(input: string, current: string, servers: string[]
     const host = raw.split(/[/?#]/, 1)[0].toLowerCase();
     const base = new URL(current);
     const bare = [base.origin, ...origins].find(origin => new URL(origin).host === host);
-    // A hostname pasted without its scheme must not quietly become a page path.
-    if (!bare && /^(?:localhost(?::|$)|\[|[\w-]+\.[\w.-]+(?::\d+)?$)/i.test(host)) return;
-    const url = bare ? new URL(new URL(bare).protocol + "//" + raw) : new URL(raw, base);
-    if (origins.has(url.origin) && ["http:", "https:"].includes(url.protocol) && !url.username && !url.password) return url.href;
+    let url: URL;
+    if (bare) {
+      url = new URL(new URL(bare).protocol + "//" + raw);
+    } else if (/^(?:localhost|\[[\da-f:.]+\]|[\p{L}\p{N}-]+(?:\.[\p{L}\p{N}-]+)+\.?)(?::\d+)?$/iu.test(host)) {
+      const loopback = /^(?:localhost|127\.[\d.]+|\[::1\])(?::|$)/.test(host);
+      url = new URL((loopback ? "http://" : "https://") + raw);
+    } else {
+      url = new URL(raw, base);
+    }
+    if (["http:", "https:"].includes(url.protocol) && !url.username && !url.password) return url.href;
   } catch { /* Malformed address. */ }
+}
+
+/** The session's dev servers use the instrumented preview. Other web
+ * addresses open in the native browser view in the same workspace. */
+export function isPreviewDevServer(address: string, servers: string[]): boolean {
+  const origin = new URL(address).origin;
+  return servers.some(server => {
+    try { return new URL(server).origin === origin; } catch { return false; }
+  });
 }
 
 export interface PreviewMark {
@@ -217,7 +232,7 @@ class PreviewStore {
     let url: URL;
     try { url = new URL(address); } catch { return; }
     if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) return;
-    const external = !previewAddress(url.href, url.href, servers);
+    const external = !isPreviewDevServer(url.href, servers);
     this.open(sessionId, url.href, { external, prep: !external && device ? { device } : undefined });
   }
   duplicate(device?: string) {

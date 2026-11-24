@@ -1,6 +1,6 @@
 <script lang="ts">
   import { tick } from "svelte";
-  import { preview, previewAddress, type OpenPreviewTab } from "$lib/preview.svelte";
+  import { isPreviewDevServer, preview, previewAddress, type OpenPreviewTab } from "$lib/preview.svelte";
   import { store } from "$lib/store.svelte";
   import { devUrlGroups, devUrlLabel } from "$lib/devurl";
   import Button from "../Button.svelte";
@@ -23,9 +23,42 @@
   const label = (tab: OpenPreviewTab) => tab.title || tab.documentTitle || devUrlLabel(tab.currentURL);
   const tabId = (tab: OpenPreviewTab) => `preview-tab-${tab.id}`;
 
+  let addressTab = $state<number | null>(null);
+  let draft = $state("");
+  let addressError = $state("");
+  let addressInput = $state<HTMLInputElement>();
+  let addressButton = $state<HTMLButtonElement>();
+  const editing = $derived(!!current && preview.visible && addressTab === current.id);
+
+  async function editAddress() {
+    if (!current || !preview.visible) return;
+    if (!editing) draft = current.currentURL;
+    addressError = "";
+    addressTab = current.id;
+    await tick();
+    addressInput?.focus();
+    addressInput?.select();
+  }
+  async function dismissAddress() {
+    addressTab = null;
+    await tick();
+    addressButton?.focus();
+  }
+  function goToAddress(e: SubmitEvent) {
+    e.preventDefault();
+    if (!current || !editing) return;
+    const url = previewAddress(draft, current.currentURL, servers);
+    if (!url) {
+      addressError = "Enter a website address or a page path.";
+      addressInput?.focus();
+      return;
+    }
+    addressTab = null;
+    navigate(url);
+  }
   function navigate(url: string, back = false) {
     const page = pages[current.id];
-    const external = !previewAddress(url, current.currentURL, servers);
+    const external = !isPreviewDevServer(url, servers);
     const sameBrowser = external && current.request.external;
     preview.visit(current, url, back || sameBrowser ? "replace" : "push");
     current.canGoBackInFrame = false;
@@ -47,6 +80,19 @@
     const url = current.backStack.pop();
     if (url) navigate(url, true);
   }
+  function addressKey(e: KeyboardEvent) {
+    if (e.key === "Escape" && !e.isComposing) {
+      e.preventDefault();
+      e.stopPropagation();
+      void dismissAddress();
+    }
+  }
+  function openServer(url: string) {
+    addressTab = null;
+    preview.open(current.request.sessionId, url);
+    void focusPage();
+  }
+
   // The port distinguishes servers; on the same server the route distinguishes pages.
   const origins = $derived(new Set(preview.tabs.map(t => new URL(t.currentURL).origin)));
   function subtitle(tab: OpenPreviewTab) {
@@ -107,11 +153,20 @@
     focusTab(next);
   }
   function hidePreview() {
+    addressTab = null;
     preview.visible = false;
   }
   export function menuAction(action: string) {
     if (!current) return;
     if (action === "toggle-preview") { hidePreview(); return; }
+    // AppKit owns ⌘L even inside a focused, cross-origin frame. Outside
+    // Preview the same menu item routes to the SSH conversation.
+    if (action === "ssh-talk") { void editAddress(); return; }
+    // Keep unrelated app shortcuts from dismissing a partially typed URL.
+    if (editing) {
+      if (action === "close-tab") void dismissAddress();
+      return;
+    }
     switch (action) {
       case "close-tab": void closeTab(preview.active); break;
       case "preview-duplicate": {
@@ -159,24 +214,16 @@
       </button>
       <h2 class="mr-2 self-stretch content-center text-lg text-ink max-sm:sr-only">Preview</h2>
       <Button icon aria-label="Back" title="Back" disabled={!current.canGoBackInFrame && !current.backStack.length} onclick={goBack}><Icon name="arrow-left" size={16} /></Button>
-      <nav aria-label="Dev servers" class="drag flex max-h-[22dvh] min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 overflow-y-auto">
-        {#each groups as group (group.name)}
-          <div role="group" aria-label={group.label || "Addresses"} class="grid min-w-0 max-w-full gap-0.5">
-            {#if group.label}<h3 class="px-1.5 text-sm font-medium text-ink">{group.label}</h3>{/if}
-            <div class="flex min-w-0 flex-wrap gap-1">
-              {#each group.urls as url (url)}
-                {@const action = `Open ${devUrlLabel(url)} in a new tab`}
-                <Button size="xs" class="max-w-full font-mono!" title={action} aria-label={action} onclick={() => { preview.open(current.request.sessionId, url); if (compact && expanded) closeSidebar(); }}>
-                  <Icon name="plus" size={12} /><span class="truncate">{devUrlLabel(url)}</span>
-                </Button>
-              {/each}
-            </div>
-          </div>
-        {/each}
-      </nav>
+      <button bind:this={addressButton} type="button" class="address-bar no-drag" aria-label="Edit preview address"
+        aria-keyshortcuts="Meta+l" aria-haspopup="dialog" title={current.currentURL} onclick={editAddress}>
+        <Icon name="globe" size={15} />
+        <span class="min-w-0 flex-1 truncate text-left text-ink">{current.currentURL}</span>
+        <kbd class="shrink-0 text-xs max-sm:hidden">⌘L</kbd>
+      </button>
     </div>
   {/snippet}
-  <Modal title="Preview" headerContent={header} visible={preview.visible} onClose={hidePreview} onkey={onModalKey} fullscreen bodyClass="min-w-0 overflow-hidden">
+  <div inert={editing}>
+    <Modal title="Preview" headerContent={header} visible={preview.visible} onClose={hidePreview} onkey={onModalKey} fullscreen bodyClass="min-w-0 overflow-hidden">
       <div class="relative flex h-full min-h-0 overflow-hidden">
         {#if compact}
           <button type="button" tabindex="-1" aria-label="Dismiss page sidebar" inert={!expanded} aria-hidden={!expanded}
@@ -213,10 +260,10 @@
               {#if tab.visited}
                 {#key tab.request}
                   {#if tab.request.external}
-                    <ExternalPreview {tab} active={preview.visible && current === tab && !(compact && expanded)}
+                    <ExternalPreview {tab} active={preview.visible && current === tab && !editing && !(compact && expanded)}
                       onNewTab={url => preview.openLink(tab.request.sessionId, url, servers)} bind:this={pages[tab.id]} />
                   {:else}
-                    <SessionPreview {tab} active={preview.visible && current === tab} bind:this={pages[tab.id]} />
+                    <SessionPreview {tab} active={preview.visible && current === tab && !editing} bind:this={pages[tab.id]} />
                   {/if}
                 {/key}
               {/if}
@@ -224,10 +271,59 @@
           {/each}
         </div>
       </div>
-  </Modal>
+    </Modal>
+  </div>
+  {#if editing}
+    {#snippet addressForm()}
+      <form onsubmit={goToAddress} class="flex min-w-0 items-center gap-2">
+        <Icon name="globe" size={17} class="text-faint" />
+        <input bind:this={addressInput} bind:value={draft} aria-label="Preview address" aria-invalid={!!addressError}
+          aria-describedby={addressError ? "preview-address-error" : undefined}
+          oninput={() => addressError = ""} type="text" inputmode="url" autocomplete="off" autocapitalize="off"
+          spellcheck="false" placeholder="URL or path, e.g. /cp" class="min-w-0 flex-1 rounded-md border border-edge bg-canvas px-3 py-2 text-ink" />
+        <Button type="submit" variant="primary" disabled={!draft.trim()}>Go<Icon name="arrow-right" size={14} /></Button>
+      </form>
+    {/snippet}
+    <Modal title="Open address" headerContent={addressForm} onClose={dismissAddress} onkey={addressKey} width="580px">
+      {#if addressError}<p id="preview-address-error" class="mt-2 text-sm text-warn" role="alert">{addressError}</p>{/if}
+      <nav aria-label="Dev servers" class="grid gap-3">
+        {#each groups.filter(g => g.urls.length) as group (group.name)}
+          <div role="group" aria-label={group.label || "Dev servers"} class="grid min-w-0 max-w-full gap-0.5">
+            <h3 class="px-1.5 text-sm font-medium text-faint">{group.label || "Dev servers"}</h3>
+            <div class="flex min-w-0 flex-wrap gap-1">
+              {#each group.urls as url (url)}
+                {@const action = `Open ${devUrlLabel(url)} in a new tab`}
+                <Button size="xs" class="max-w-full font-mono!" title={action} aria-label={action} onclick={() => openServer(url)}>
+                  <Icon name="plus" size={12} /><span class="truncate">{devUrlLabel(url)}</span>
+                </Button>
+              {/each}
+            </div>
+          </div>
+        {:else}
+          <p class="text-sm text-faint">This session has no running dev servers.</p>
+        {/each}
+      </nav>
+    </Modal>
+  {/if}
 {/if}
 
 <style>
+  .address-bar {
+    display: flex;
+    align-items: center;
+    gap: .625rem;
+    flex: 1 1 0;
+    max-width: 40rem;
+    min-width: 0;
+    margin-inline: auto;
+    padding: .375rem .75rem;
+    border: 1px solid var(--color-edge);
+    border-radius: 8px;
+    background: var(--color-canvas);
+    color: var(--color-faint);
+    cursor: text;
+  }
+  .address-bar:hover, .address-bar:focus-visible { border-color: var(--color-accent); }
   .page-sidebar {
     --pages-width: clamp(15rem, 18vw, 17.5rem);
     position: relative;

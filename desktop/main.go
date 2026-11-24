@@ -355,23 +355,28 @@ func installAppMenu(app *application.App, zoom *zoomController) {
 		mi.OnClick(func(*application.Context) { app.Event.Emit(evtSessionAction, item.action) })
 		previewItems = append(previewItems, mi)
 	}
+	if runtime.GOOS != "darwin" {
+		file.AddRole(application.Quit)
+	}
+	menu.AddRole(application.EditMenu)
+	menu.AddRole(application.ViewMenu)
+	talkItem := newSessionMenu(app, menu.AddSubmenu("Session"))
 	app.Event.On(evtPreviewOpen, func(e *application.CustomEvent) {
 		open, ok := e.Data.(bool)
 		if !ok {
 			return
 		}
 		application.InvokeSync(func() {
+			if open {
+				talkItem.SetLabel("Open Preview Address…")
+			} else {
+				talkItem.SetLabel("Talk to Agent")
+			}
 			for _, item := range previewItems {
 				item.SetEnabled(open)
 			}
 		})
 	})
-	if runtime.GOOS != "darwin" {
-		file.AddRole(application.Quit)
-	}
-	menu.AddRole(application.EditMenu)
-	menu.AddRole(application.ViewMenu)
-	newSessionMenu(app, menu.AddSubmenu("Session"))
 	menu.AddRole(application.WindowMenu)
 	menu.AddRole(application.HelpMenu)
 
@@ -403,7 +408,7 @@ func installAppMenu(app *application.App, zoom *zoomController) {
 // act (evtSessionAction): the target is the cockpit's current selection, which
 // is frontend nav state the backend has no view of — the same reason the
 // status-bar menu emits for Settings instead of opening it.
-func newSessionMenu(app *application.App, menu *application.Menu) {
+func newSessionMenu(app *application.App, menu *application.Menu) *application.MenuItem {
 	ask := func(action string) func(*application.Context) {
 		return func(*application.Context) { app.Event.Emit(evtSessionAction, action) }
 	}
@@ -458,7 +463,7 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	menu.Add("Review Next Approval").
 		SetAccelerator("CmdOrCtrl+Shift+a").
 		OnClick(ask(actionSSHApproval))
-	menu.Add("Talk to Agent").
+	talkItem := menu.Add("Talk to Agent").
 		SetAccelerator("CmdOrCtrl+l").
 		OnClick(ask(actionSSHTalk))
 	menu.Add("Show or Hide Terminal").
@@ -468,6 +473,7 @@ func newSessionMenu(app *application.App, menu *application.Menu) {
 	menu.Add("Kill Session…").
 		SetAccelerator("CmdOrCtrl+Shift+k").
 		OnClick(ask(actionKill))
+	return talkItem
 }
 
 // pathProbeTimeout bounds the login-shell PATH probe. A shell with a heavy rc

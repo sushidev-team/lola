@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -127,5 +128,44 @@ func TestStatamicInitialPageUsesSameNavigationURLs(t *testing.T) {
 	}
 	if data.Props.CreateUrls["de"] != self.String()+"/cp?site=de&new=1" || data.Props.Values["url"] != "https://site.test/editorial" {
 		t.Fatalf("bootstrap props = %+v", data.Props)
+	}
+}
+
+func TestStatamicSignedInSidebar(t *testing.T) {
+	origin, _ := url.Parse("http://localhost:20016")
+	self, _ := url.Parse("http://p-site.localhost:4567")
+	page := `{"props":{"_statamic":{"nav":[{"items":[{"url":"http://localhost:20016/cp/collections","children":[{"url":"http://localhost:20016/cp/collections/pages?site=de#tree","children":[{"url":"https://example.com/docs"}]}],"extra":{"url":"http://localhost:20016/content"}}]}]}}}`
+	// Only the two control-panel links should change. Addon metadata and the
+	// external child link travel with the same menu.
+	want := strings.ReplaceAll(page, origin.String()+"/cp/", self.String()+"/cp/")
+	for _, inertia := range []bool{false, true} {
+		body := page
+		h := make(http.Header)
+		if inertia {
+			h.Set("X-Inertia", "true")
+			h.Set("Content-Type", "application/json")
+		} else {
+			h.Set("Content-Type", "text/html")
+			body = `<div id="statamic" data-page="` + html.EscapeString(page) + `"></div>`
+		}
+		resp := &http.Response{StatusCode: http.StatusOK, Header: h, Body: io.NopCloser(strings.NewReader(body))}
+		if err := rewriteResponse(resp, origin, self, htmlPageRewriter(origin, self)); err != nil {
+			t.Fatal(err)
+		}
+		b, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !inertia {
+			mount := inertiaMount.FindSubmatch(b)
+			if mount == nil || !strings.Contains(string(b), ScriptPath) {
+				t.Fatal("sidebar page missing mount or Preview bridge")
+			}
+			b = []byte(html.UnescapeString(string(mount[1])))
+		}
+		if string(b) != want {
+			t.Errorf("inertia=%t: sidebar = %s", inertia, b)
+		}
 	}
 }

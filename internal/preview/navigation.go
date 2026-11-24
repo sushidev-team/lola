@@ -48,6 +48,8 @@ const (
 	inertiaPage
 	collectionListing
 	pageProps
+	statamicShared
+	sidebar
 	listingRow
 	urlMap
 	urlField
@@ -76,12 +78,26 @@ func (fields navigationFields) child(key string) navigationFields {
 		}
 	case pageProps:
 		switch {
+		case key == "_statamic":
+			return statamicShared
 		case key == "url", key == "href", strings.HasSuffix(key, "Url"), strings.HasSuffix(key, "_url"):
 			return urlField
 		case key == "actions", strings.HasSuffix(key, "Urls"):
 			return urlMap
 		case key == "collections", key == "blueprints", key == "localizations", key == "titleFormat":
 			return pageProps
+		}
+	case statamicShared:
+		if key == "nav" {
+			return sidebar
+		}
+	case sidebar:
+		// Authenticated pages carry sections, each with items and nested children.
+		switch key {
+		case "items", "children":
+			return sidebar
+		case "url":
+			return urlField
 		}
 	case urlMap:
 		return urlField
