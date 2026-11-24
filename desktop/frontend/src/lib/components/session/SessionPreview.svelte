@@ -22,7 +22,7 @@
   import { store } from "$lib/store.svelte";
   import { elementForAgent, feedback, type ElementDraft } from "$lib/feedback.svelte";
   import "./annotation-editor.css";
-  import { devUrlLabel } from "$lib/devurl";
+  import { devUrlLabel, loginSite } from "$lib/devurl";
   import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, previewLayout, parsePick, preview, previewIcon, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
   import Button from "../Button.svelte";
   import TestLogins from "./TestLogins.svelte";
@@ -367,7 +367,7 @@
     async function arm() {
       const list = await PreviewService.TestLogins(request!.sessionId, request!.url);
       const choice = list.autoLogin;
-      if (signal.aborted || autoAttempted || !choice?.name || choice.origin !== new URL(request!.url).origin) return;
+      if (signal.aborted || autoAttempted || !choice?.name || choice.origin !== loginSite(request!.url)) return;
       onLoginForm = () => {
         onLoginForm = undefined;
         void signIn(list.project, choice.name, signal, true).catch(() => {

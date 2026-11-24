@@ -299,6 +299,6 @@ the desktop only, not the TUI or background agents.
 
 In a dev preview, open **Logins → Add login** to save a named test account for that project. Stack members use the same accounts as their standalone project. Choose an account on the local sign-in page to fill its username and password. Lola submits a recognized local sign-in form when possible. Use the pencil to edit the account or change its password. Passwords are stored in macOS Keychain.
 
-Check **Auto-login** beside a saved account to use it automatically on that local server. Choosing another account replaces the selection for the project. The active preview tries once per tab load when an empty sign-in form appears.
+Check **Auto-login** beside a saved account to use it automatically on the same local hostname and scheme, even when a dev restart assigns a new port. Choosing another account replaces the selection for the project. The active preview tries once per tab load when an empty sign-in form appears.
 
 Enable **Allow local agents to use this login** on any account you want to share. In a Mac host session, `lola dev login list` lists the shared names. Run `lola dev login run NAME -- COMMAND [ARG...]` to give the test process `LOLA_TEST_USERNAME` and `LOLA_TEST_PASSWORD`. In a stack, pass `--app MEMBER` before the name or after `list`. Docker agents have no access to the Mac’s Keychain.

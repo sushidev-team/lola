@@ -1,6 +1,13 @@
 // Presentation for the local testing addresses the daemon scraped out of a dev
 // tab's pane (internal/devurl ships them on SessionInfo.devUrls).
 
+/** Auto-login follows the project's local hostname across dev server restarts. */
+export function loginSite(url: string): string {
+  const site = new URL(url);
+  site.port = "";
+  return site.origin;
+}
+
 /**
  * The label for a dev URL chip: the address a human recognises, without the
  * scheme they never type and without a trailing slash. `http://127.0.0.1:8001`

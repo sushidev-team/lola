@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -94,7 +95,7 @@ func TestAccountsScopedSharedAndRotated(t *testing.T) {
 	}
 }
 
-func TestAutoLoginIsExclusiveAndBoundToTheSelectedServer(t *testing.T) {
+func TestAutoLoginFollowsTheProjectHostAcrossPorts(t *testing.T) {
 	t.Setenv("LOLA_HOME", t.TempDir())
 	a, _ := ForProject("shop")
 	b, _ := ForProject("api")
@@ -128,7 +129,7 @@ func TestAutoLoginIsExclusiveAndBoundToTheSelectedServer(t *testing.T) {
 	if err := a.SetAutoLogin(first, false); err != nil {
 		t.Fatal(err)
 	}
-	for _, c := range []AutoLogin{first, {second.Name, "http://localhost:3001"}} {
+	for _, c := range []AutoLogin{first, {second.Name, "http://other.test:3000"}, {second.Name, "https://localhost:3000"}} {
 		if got, err := a.AutoCredentials(c); err != nil || got != nil {
 			t.Fatal("released a different selection", err)
 		}
@@ -136,10 +137,19 @@ func TestAutoLoginIsExclusiveAndBoundToTheSelectedServer(t *testing.T) {
 	if reads != 0 {
 		t.Fatal("read an unselected password")
 	}
-	if got, err := a.AutoCredentials(second); err != nil || got == nil || got.Username != second.Name {
+	// Older Lola versions persisted the port. Both record formats must survive a restart.
+	persisted, err := os.ReadFile(filepath.Join(a.dir, "auto-login"))
+	if err != nil || strings.Contains(string(persisted), ":3000") {
+		t.Fatal("new selection still contains a port", err)
+	}
+	if err := a.write(filepath.Join(a.dir, "auto-login"), second); err != nil {
+		t.Fatal(err)
+	}
+	restarted := AutoLogin{second.Name, "http://LOCALHOST:3001/login"}
+	if got, err := a.AutoCredentials(restarted); err != nil || got == nil || got.Username != second.Name {
 		t.Fatal("missing selected account", err)
 	}
-	if got, err := b.AutoLogin(); err != nil || got != first {
+	if got, err := b.AutoLogin(); err != nil || got != (AutoLogin{first.Name, "http://localhost"}) {
 		t.Fatal("changed another project", err)
 	}
 	if err := a.SetAutoLogin(second, false); err != nil {

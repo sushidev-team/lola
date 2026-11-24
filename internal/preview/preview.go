@@ -441,15 +441,6 @@ func concat(parts ...[]byte) []byte {
 	return bytes.Join(parts, nil)
 }
 
-// Origin returns the normalized origin of an allowed local preview URL.
-func Origin(raw string) (string, error) {
-	u, err := Allowed(raw)
-	if err != nil {
-		return "", err
-	}
-	return canonicalOrigin(u).String(), nil
-}
-
 // canonicalOrigin is the proxy key and upstream for a URL: lowercase host, and
 // no port when it is the scheme's default. Two spellings of one server must share
 // a proxy, or each gets its own cookie host and a login does not carry over.

@@ -88,8 +88,8 @@ it("switches the single auto-login checkbox and allows clearing it", async () =>
   const url = "http://localhost:3000";
   const profiles = ["Buyer", "Admin"].map(name => ({ name, username: name, agent: false }));
   vi.mocked(PreviewService.TestLogins)
-    .mockResolvedValueOnce({ project: "shop", autoLogin: { name: "Buyer", origin: url }, profiles })
-    .mockResolvedValueOnce({ project: "shop", autoLogin: { name: "Admin", origin: url }, profiles })
+    .mockResolvedValueOnce({ project: "shop", autoLogin: { name: "Buyer", origin: "http://localhost" }, profiles })
+    .mockResolvedValueOnce({ project: "shop", autoLogin: { name: "Admin", origin: "http://localhost" }, profiles })
     .mockResolvedValueOnce({ project: "shop", autoLogin: noAuto, profiles });
   render(TestLogins, { session: "s", url, signIn: vi.fn(), close: vi.fn() });
   const buyer = await screen.findByRole("checkbox", { name: "Auto-login as Buyer" });
@@ -104,14 +104,14 @@ it("switches the single auto-login checkbox and allows clearing it", async () =>
   await waitFor(() => expect(admin).not.toBeChecked());
 });
 
-it("uses the selected account on a matching form only once across a login redirect", async () => {
-  const url = "http://localhost:3000", origin = "http://p-example.localhost:5555";
+it("uses the host’s selected account on a new dev port only once across a login redirect", async () => {
+  const url = "http://localhost:20024", origin = "http://p-example.localhost:5555";
   vi.mocked(PreviewService.Open).mockResolvedValue(origin + "/login");
-  vi.mocked(PreviewService.TestLogins).mockResolvedValue({ project: "shop", profiles: [{ name: "Buyer", username: "buyer", agent: false }], autoLogin: { name: "Buyer", origin: url } });
+  vi.mocked(PreviewService.TestLogins).mockResolvedValue({ project: "shop", profiles: [{ name: "Buyer", username: "buyer", agent: false }], autoLogin: { name: "Buyer", origin: "http://localhost" } });
   vi.mocked(PreviewService.AutoTestLogin).mockResolvedValue({ username: "buyer", password: "fixture" });
   render(PreviewWorkspace);
   preview.open("s", url);
-  const frame = await screen.findByTitle("Preview of localhost:3000") as HTMLIFrameElement;
+  const frame = await screen.findByTitle("Preview of localhost:20024") as HTMLIFrameElement;
   const post = vi.spyOn(frame.contentWindow!, "postMessage");
   const say = (type: string, documentId: string) => fireEvent(window, new MessageEvent("message", { source: frame.contentWindow, origin,
     data: { source: "lola-preview", type, documentId, url: origin + "/login" },
@@ -126,9 +126,11 @@ it("uses the selected account on a matching form only once across a login redire
     await say("ready", "redirect");
     await say("login-form", "redirect");
     expect(PreviewService.AutoTestLogin).toHaveBeenCalledTimes(1);
+    expect(PreviewService.AutoTestLogin).toHaveBeenCalledWith("s", url, "shop", "Buyer", origin);
     vi.mocked(PreviewService.UseTestLogin).mockResolvedValue({ username: "buyer", password: "fixture" });
     await fireEvent.click(screen.getByRole("button", { name: "Test logins" }));
     expect(await screen.findByRole("checkbox", { name: "Auto-login as Buyer" })).toBeChecked();
+    expect(screen.queryByText(/currently on/)).not.toBeInTheDocument();
     await fireEvent.click(screen.getByRole("button", { name: /Buyer buyer/ }));
     await waitFor(() => expect(post).toHaveBeenCalledWith({
       target: "lola-preview", type: "test-login", documentId: "redirect", username: "buyer", password: "fixture",

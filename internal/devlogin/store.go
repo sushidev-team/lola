@@ -17,6 +17,7 @@ import (
 	"sync"
 
 	"github.com/sushidev-team/lola/internal/config"
+	"github.com/sushidev-team/lola/internal/preview"
 	"github.com/sushidev-team/lola/internal/secrets"
 )
 
@@ -27,10 +28,24 @@ type Profile struct {
 }
 
 // AutoLogin is the single automatic account for this project, scoped to the
-// local server where the user enabled it. A missing selection is the default.
+// scheme and hostname where the user enabled it. A missing selection is the default.
 type AutoLogin struct {
 	Name   string `json:"name"`
 	Origin string `json:"origin"`
+}
+
+// Old selections stored a full origin including the dev server's port.
+func (a AutoLogin) forHost() (AutoLogin, error) {
+	u, err := preview.Allowed(a.Origin)
+	if err != nil {
+		return AutoLogin{}, err
+	}
+	host := strings.ToLower(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	a.Origin = u.Scheme + "://" + host
+	return a, nil
 }
 
 type Credentials struct {
@@ -185,8 +200,10 @@ func (s Store) AutoLogin() (AutoLogin, error) {
 		return AutoLogin{}, err
 	}
 	var choice AutoLogin
-	err = json.Unmarshal(data, &choice)
-	return choice, err
+	if err := json.Unmarshal(data, &choice); err != nil {
+		return AutoLogin{}, err
+	}
+	return choice.forHost()
 }
 
 func (s Store) SetAutoLogin(choice AutoLogin, enabled bool) error {
@@ -196,6 +213,10 @@ func (s Store) SetAutoLogin(choice AutoLogin, enabled bool) error {
 		return s.clearAutoLogin(choice.Name)
 	}
 	if _, err := s.read(choice.Name); err != nil {
+		return err
+	}
+	choice, err := choice.forHost()
+	if err != nil {
 		return err
 	}
 	return s.write(filepath.Join(s.dir, "auto-login"), choice)
@@ -213,6 +234,10 @@ func (s Store) clearAutoLogin(name string) error {
 func (s Store) AutoCredentials(choice AutoLogin) (*Credentials, error) {
 	writes.Lock()
 	defer writes.Unlock()
+	choice, err := choice.forHost()
+	if err != nil {
+		return nil, err
+	}
 	current, err := s.AutoLogin()
 	if err != nil || choice != current || choice.Name == "" {
 		return nil, err

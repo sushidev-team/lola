@@ -3,7 +3,7 @@
 
 /**
  * AutoLogin is the single automatic account for this project, scoped to the
- * local server where the user enabled it. A missing selection is the default.
+ * scheme and hostname where the user enabled it. A missing selection is the default.
  */
 export interface AutoLogin {
     "name": string;

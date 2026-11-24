@@ -2,6 +2,7 @@
   import { onDestroy, onMount, tick } from "svelte";
   import { PreviewService } from "@bindings/desktop";
   import type { Profile } from "@bindings/internal/devlogin/models";
+  import { loginSite } from "$lib/devurl";
   import Button from "../Button.svelte";
   import Checkbox from "../Checkbox.svelte";
   import Icon from "../Icon.svelte";
@@ -70,7 +71,7 @@
     <h3 class="font-semibold">{mode === "list" ? "Test logins" : mode === "add" ? "Add test login" : "Edit test login"}</h3>
     <Button size="xs" icon aria-label="Close test logins" onclick={close}><Icon name="x" size={14} /></Button>
   </header>
-  {#if project}<p class="text-xs text-faint">{project} · {new URL(url).host}</p>{/if}
+  {#if project}<p class="text-xs text-faint">{project} · {new URL(url).hostname}</p>{/if}
   {#if error}<p role="alert" class="text-bad">{error}</p>{/if}
   {#if mode === "list"}
     {#if busy && !profiles.length}<p role="status">Loading…</p>
@@ -90,10 +91,10 @@
             <Button size="xs" icon aria-label={'Remove ' + p.name} disabled={busy} onclick={() => removeName = p.name}><Icon name="trash-2" size={13} /></Button>
           {/if}
         </div>
-        <label class="flex items-center gap-2 px-1 text-xs text-ink-2" title={'Automatically sign in on ' + new URL(url).origin}>
+        <label class="flex items-center gap-2 px-1 text-xs text-ink-2" title={'Automatically sign in on ' + loginSite(url)}>
           <Checkbox aria-label={'Auto-login as ' + p.name} checked={autoLogin?.name === p.name}
             disabled={busy} onclick={(e) => { e.preventDefault(); void perform(() => setAutoLogin(p, autoLogin?.name !== p.name)); }} />
-          Auto-login{#if autoLogin?.name === p.name && autoLogin.origin !== new URL(url).origin} (currently on {autoLogin.origin}){/if}
+          Auto-login{#if autoLogin?.name === p.name && autoLogin.origin !== loginSite(url)} (currently on {autoLogin.origin}){/if}
         </label>
       </div>
     {/each}

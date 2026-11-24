@@ -134,11 +134,7 @@ func (s *PreviewService) SetAutoLogin(session, url, project, name string, enable
 	if err != nil {
 		return err
 	}
-	origin, err := preview.Origin(url)
-	if err != nil {
-		return err
-	}
-	return v.SetAutoLogin(devlogin.AutoLogin{Name: name, Origin: origin}, enabled)
+	return v.SetAutoLogin(devlogin.AutoLogin{Name: name, Origin: url}, enabled)
 }
 
 func (s *PreviewService) AutoTestLogin(session, url, project, name, frameOrigin string) (*devlogin.Credentials, error) {
@@ -149,9 +145,5 @@ func (s *PreviewService) AutoTestLogin(session, url, project, name, frameOrigin 
 	if err != nil {
 		return nil, err
 	}
-	origin, err := preview.Origin(url)
-	if err != nil {
-		return nil, err
-	}
-	return v.AutoCredentials(devlogin.AutoLogin{Name: name, Origin: origin})
+	return v.AutoCredentials(devlogin.AutoLogin{Name: name, Origin: url})
 }
