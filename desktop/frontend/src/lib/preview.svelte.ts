@@ -49,9 +49,15 @@ export function parsePick(data: unknown): PickedElement | null {
   return { url: clip(d.url, 600), selector, tag: clip(d.tag, 40), html: clip(d.html, 6000), text: clip(d.text, 400) };
 }
 
-/** The frame size for a preset, as an inline style. */
-export function frameStyle(v: Viewport): string {
-  return v.width && v.height ? `width:${v.width}px;height:${v.height}px` : "width:100%;height:100%";
+/** Size the browsing viewport first, then scale its painted contents into the stage. */
+export function previewLayout(v: Viewport, width: number, height: number) {
+  const logicalWidth = v.width ?? 0;
+  const scale = width > 0 && height > 0 && logicalWidth > 0
+    ? Math.min(1, width / logicalWidth, v.height ? height / v.height : 1)
+    : 1;
+  const logicalHeight = v.height ?? 0;
+  const style = `width:${logicalWidth ? logicalWidth + "px" : "100%"};height:${logicalHeight ? logicalHeight + "px" : "100%"}`;
+  return { scale, style: scale < 1 ? `${style};transform:scale(${scale})` : style };
 }
 
 /**

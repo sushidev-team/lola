@@ -345,11 +345,11 @@ describe("in a session", () => {
     try {
       chord("toggle-preview");
       chord("ssh-talk");
-      await screen.findByRole("textbox", { name: "Preview address" });
+      await screen.findByRole("combobox", { name: "Preview address" });
       const tab = preview.tabs[preview.active].id;
       chord("toggle-git");
       expect(screen.queryByRole("dialog", { name: "Preview" })).toBeNull();
-      expect(screen.queryByRole("textbox", { name: "Preview address" })).toBeNull();
+      expect(screen.queryByRole("combobox", { name: "Preview address" })).toBeNull();
       expect(nav.inGit).toBe(true);
       expect(nav.project).toBe("p");
 
@@ -373,7 +373,7 @@ describe("in a session", () => {
       await screen.findByRole("dialog", { name: "Preview" });
       preview.tabs[0].currentURL = root + "/billing#details";
       chord("ssh-talk");
-      const address = await screen.findByRole("textbox", { name: "Preview address" }) as HTMLInputElement;
+      const address = await screen.findByRole("combobox", { name: "Preview address" }) as HTMLInputElement;
       expect(address).toHaveValue(root + "/billing#details");
       expect(address).toHaveFocus();
       await waitFor(() => expect(address.selectionEnd! - address.selectionStart!).toBe(address.value.length));
@@ -401,6 +401,60 @@ describe("in a session", () => {
     } finally {
       preview.close();
     }
+  });
+  it("keeps bookmarks and recent pages per project across preview sessions", async () => {
+    const root = "http://localhost:5173", moved = "http://localhost:20006";
+    await mount([plain(A, { project: "book-test", devUrls: [root] }), plain(B, { project: "other-book-test", devUrls: [moved] })]);
+    try {
+      preview.open(A, root + "/advertising");
+      chord("ssh-talk");
+      await fireEvent.click(await screen.findByRole("button", { name: "Bookmark current page" }));
+      expect(screen.getByRole("region", { name: "Bookmarks" })).toHaveTextContent("/advertising");
+      expect(screen.getByRole("region", { name: "Recent pages" })).toHaveTextContent("/advertising");
+      preview.open(B, moved);
+      chord("ssh-talk");
+      expect(screen.queryByRole("region", { name: "Bookmarks" })).toBeNull();
+      store.sessions = [plain(B, { project: "book-test", devUrls: [moved] })] as never;
+      const bookmarks = await screen.findByRole("region", { name: "Bookmarks" });
+      expect(bookmarks).toHaveTextContent("/advertising");
+      expect(localStorage.getItem("lola.preview.places.v1/project/book-test")).not.toContain("localhost");
+      await fireEvent.click(bookmarks.querySelector("button")!);
+      expect(preview.tabs[preview.active].currentURL).toBe(moved + "/advertising");
+      chord("ssh-talk");
+      const field = await screen.findByRole("combobox", { name: "Preview address" });
+      await press("ArrowDown", field);
+      expect(screen.getByRole("option", { selected: true })).toHaveTextContent("/");
+      expect(field).toHaveFocus();
+      await press("Enter", field);
+      expect(new URL(preview.tabs[preview.active].currentURL).pathname).toBe("/");
+      chord("ssh-talk");
+      const address = await screen.findByRole("combobox", { name: "Preview address" });
+      await press("ArrowDown", address);
+      expect(screen.getByRole("option", { selected: true })).toHaveTextContent("/advertising");
+      await fireEvent.click(screen.getByRole("button", { name: "Remove recent page /advertising" }));
+      expect(screen.queryByRole("option", { name: "/advertising" })).toBeNull();
+      expect(screen.getByRole("option", { selected: true })).toHaveAccessibleName("/");
+      expect(address).toHaveFocus();
+      expect(screen.getByRole("region", { name: "Bookmarks" })).toHaveTextContent("/advertising");
+      await fireEvent.click(screen.getByRole("button", { name: "Remove bookmark for /advertising" }));
+      expect(screen.queryByRole("region", { name: "Bookmarks" })).toBeNull();
+      expect(screen.getByRole("option", { name: "/" })).toBeVisible();
+    } finally { preview.close(); localStorage.removeItem("lola.preview.places.v1/project/book-test"); localStorage.removeItem("lola.preview.places.v1/project/other-book-test"); }
+  });
+  it("opens the docked tools without reloading the page and keeps the viewport draggable", async () => {
+    const url = "http://localhost:5173";
+    await mount([plain(A, { devUrls: [url] })]);
+    preview.open(A, url);
+    try {
+      const frame = await screen.findByTitle("Preview of localhost:5173");
+      chord("preview-inspector");
+      expect(await screen.findByRole("complementary", { name: "Developer tools" })).toBeVisible();
+      expect(screen.getByRole("separator", { name: "Resize preview viewport" })).toBeVisible();
+      await fireEvent.click(screen.getByRole("button", { name: "Elements" }));
+      chord("preview-inspector");
+      expect(screen.queryByRole("complementary", { name: "Developer tools" })).toBeNull();
+      expect(screen.getByTitle(frame.title)).toBe(frame);
+    } finally { preview.close(); }
   });
   it("Esc climbs one step", async () => {
     await mount([plain(A, { ssh: { connections: [conn], lastSeq: 0 } })]);

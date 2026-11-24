@@ -180,6 +180,8 @@ describe("the merge", () => {
   it("an undelivered message stays out of the story, as a queue row's business", () => {
     const queued: any = { id: "h1", kind: "human", order: 1, seq: 1, at: iso(0), human: { text: "later", delivered: false } };
     expect(flatRows(buildStory({ feed: [], items: [queued] }))).toEqual([]);
+    queued.human.origin = "preview";
+    expect(flatRows(buildStory({ feed: [], items: [queued] }))).toMatchObject([{ kind: "you", id: "h1" }]);
   });
 
   it("a block waiting on a person is a card, and joins the story once decided", () => {

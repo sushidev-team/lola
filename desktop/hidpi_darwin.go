@@ -7,7 +7,7 @@ package main
 #cgo LDFLAGS: -framework Cocoa -framework WebKit
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
-void lolaInstallExternalPreview(WKWebView *host);
+void lolaInstallExternalPreview(WKWebView *host, NSString *debugSource);
 
 // _setOverrideDeviceScaleFactor: is a private WKWebView SPI (used by Electron,
 // Playwright) that forces window.devicePixelRatio to a given value. Wails serves
@@ -43,12 +43,12 @@ static id lolaWebView(id window) {
     return webView;
 }
 
-static void lolaConfigureWebView(id window) {
+static void lolaConfigureWebView(id window, NSString *debugSource) {
     id webView = lolaWebView(window);
     if (webView == nil) {
         return;
     }
-    lolaInstallExternalPreview(webView);
+    lolaInstallExternalPreview(webView, debugSource);
     // Prefer the window's actual screen (correct after a move to a different-DPI
     // display); mainScreen only as a fallback before the window is placed.
     NSScreen *screen = [(NSWindow *)window screen];
@@ -66,16 +66,17 @@ static void lolaConfigureWebView(id window) {
     }
 }
 
-void lolaConfigureWindow(void *nsWindowPtr) {
+void lolaConfigureWindow(void *nsWindowPtr, const char *debugScript) {
     if (nsWindowPtr == NULL) {
         return;
     }
+    NSString *source = [NSString stringWithUTF8String:debugScript];
     id window = (__bridge id)nsWindowPtr;
     if ([NSThread isMainThread]) {
-        lolaConfigureWebView(window);
+        lolaConfigureWebView(window, source);
     } else {
         dispatch_async(dispatch_get_main_queue(), ^{
-            lolaConfigureWebView(window);
+            lolaConfigureWebView(window, source);
         });
     }
 }
@@ -111,13 +112,19 @@ void lolaSetPageZoom(void *nsWindowPtr, double factor) {
 */
 import "C"
 
-import "unsafe"
+import (
+	"unsafe"
+
+	"github.com/sushidev-team/lola/internal/preview"
+)
 
 // configureNativeWebView installs the external Preview bridge and sets the
 // backing scale of the Wails webview.
 func configureNativeWebView(nsWindow unsafe.Pointer) {
 	if nsWindow != nil {
-		C.lolaConfigureWindow(nsWindow)
+		source := C.CString(preview.DebuggerJS)
+		defer C.free(unsafe.Pointer(source))
+		C.lolaConfigureWindow(nsWindow, source)
 	}
 }
 

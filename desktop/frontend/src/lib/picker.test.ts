@@ -128,3 +128,34 @@ it('waits for a local sign-in form and preserves input typed before auto-login a
     vi.restoreAllMocks();
   }
 });
+
+it('uses plain C on the page and leaves typing, composition, copy and handled shortcuts alone', () => {
+  const frame = document.createElement('iframe');
+  document.body.appendChild(frame);
+  const child = frame.contentWindow!;
+  const listen = vi.spyOn(child, 'addEventListener');
+  const post = vi.spyOn(child.parent, 'postMessage').mockImplementation(() => {});
+  try {
+    new Function('window', 'document', script)(child, child.document);
+    const documentId = post.mock.calls[0][0].documentId;
+    child.dispatchEvent(new MessageEvent('message', { source: child.parent, data: {
+      target: 'lola-preview', type: 'comment-shortcut', documentId, enabled: true,
+    }}));
+    // jsdom cannot dispatch trusted keyboard events. Exercise the actual listener.
+    const keydown = listen.mock.calls.find(([event]) => event === 'keydown')![1] as EventListener;
+    const press = (target: HTMLElement, extra = {}) => {
+      const preventDefault = vi.fn();
+      keydown({ key: 'c', isTrusted: true, composedPath: () => [target], preventDefault, ...extra } as unknown as Event);
+      return preventDefault;
+    };
+    expect(press(document.body)).toHaveBeenCalledOnce();
+    expect(post).toHaveBeenCalledWith({ source: 'lola-preview', type: 'comment-shortcut', documentId }, '*');
+    for (const tag of ['input', 'textarea', 'select']) expect(press(document.createElement(tag))).not.toHaveBeenCalled();
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true'; editor.setAttribute('contenteditable', 'true');
+    expect(press(editor)).not.toHaveBeenCalled();
+    for (const extra of [{ metaKey: true }, { ctrlKey: true }, { isComposing: true }, { defaultPrevented: true }, { repeat: true }]) {
+      expect(press(document.body, extra)).not.toHaveBeenCalled();
+    }
+  } finally { frame.remove(); vi.restoreAllMocks(); }
+});

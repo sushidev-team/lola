@@ -339,7 +339,7 @@
       {#if feedback.draftsFor(sessionId).length}<p class="text-sm text-ink-2">{feedback.draftsFor(sessionId).length} code comments</p>{/if}
       {#each feedback.elementsFor(sessionId) as element,i (element)}
         <div class="flex items-start justify-between gap-2">
-          <p class="min-w-0 text-sm wrap-anywhere text-ink-2"><span class="mr-1 inline-grid size-5 place-items-center rounded-full bg-accent-fill text-xs font-semibold text-accent" aria-label={`Live comment ${i + 1}`}>{i + 1}</span>{element.note}</p>
+          <p class="min-w-0 text-sm wrap-anywhere text-ink-2"><span class="mr-1 inline-grid size-5 place-items-center rounded-full bg-accent-fill text-xs font-semibold text-accent" aria-label={`Live comment ${i + 1}`}>{i + 1}</span>{element.note}{#if element.images?.length}<span class="ml-1 text-xs text-faint">{element.images.length} {element.images.length === 1 ? "image" : "images"}</span>{/if}</p>
           <Button icon size="xs" variant="danger" aria-label="Remove live comment" title="Delete live comment" onclick={() => feedback.removeElement(sessionId, element)}><Icon name="trash-2" size={14}/></Button>
         </div>
       {/each}

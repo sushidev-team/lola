@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
-import { freshSession, ssh, terms, store } from './talk.testkit';
+import { freshSession, ssh, terms, store, talkSvc } from './talk.testkit';
 import { SSH } from '$lib/terms.svelte';
 import { feed } from '$lib/feed.svelte';
 import { changes } from '$lib/changes.svelte';
@@ -350,7 +350,7 @@ it('waits for the picker and preserves edits made during a feedback send', async
   preview.open(id, url);
   try {
     const frame = await screen.findByTitle('Preview of localhost:3000') as HTMLIFrameElement;
-    const picker = screen.getByRole('button', { name: 'Inspect element' });
+    const picker = screen.getByRole('button', { name: 'Comment on element' });
     const say = (data: object) => fireEvent(window, new MessageEvent('message', {
       source: frame.contentWindow, origin, data: { source: 'lola-preview', ...data },
     }));
@@ -372,6 +372,53 @@ it('waits for the picker and preserves edits made during a feedback send', async
     finish();
     await waitFor(() => expect(refresh).toHaveBeenCalled());
     expect(screen.getByRole('textbox', { name: 'Element comment' })).toHaveValue('Change title and spacing');
+  } finally { preview.close(); refresh.mockRestore(); }
+});
+
+it('attaches pasted and dropped images to the selected element, and keeps failed copies removable', async () => {
+  const url = 'http://localhost:3000', origin = 'http://preview.localhost:5555', root = '/scratch/session';
+  const id = freshSession({ devUrls: [url], worktree: '/checkout', attachmentRoot: root });
+  const first = root + '/.lola/images/paste-aaaa.png', second = root + '/.lola/images/paste-bbbb.jpg';
+  const thumb = 'data:image/jpeg;base64,AA';
+  vi.mocked(PreviewService.Open).mockResolvedValue(origin);
+  let finish!: () => void;
+  talkSvc.AttachClipboardImage.mockImplementationOnce(() => new Promise(resolve => {
+    finish = () => resolve({ path: first, thumb });
+  }));
+  talkSvc.AttachImageFile.mockResolvedValueOnce({ path: second, thumb }).mockRejectedValueOnce(new Error('Image unreadable'));
+  vi.mocked(DaemonService.SendFeedback).mockResolvedValueOnce({ queued: true } as never);
+  const refresh = vi.spyOn(store, 'refresh').mockResolvedValue();
+  render(PreviewWorkspace);
+  preview.open(id, url);
+  try {
+    const frame = await screen.findByTitle('Preview of localhost:3000') as HTMLIFrameElement;
+    const say = (data: object) => fireEvent(window, new MessageEvent('message', {
+      source: frame.contentWindow, origin, data: { source: 'lola-preview', ...data },
+    }));
+    await say({ type: 'ready', documentId: 'one' });
+    await fireEvent.click(screen.getByRole('button', { name: 'Comment on element' }));
+    await say({ type: 'mode', picking: true });
+    await say({ type: 'pick', selector: '#picked', url: origin });
+    const dialog = screen.getByRole('dialog', { name: 'Element comment' });
+    const field = within(dialog).getByRole('textbox'), send = within(dialog).getByRole('button', {name:'Send to agent'});
+    await fireEvent.paste(field, { clipboardData: { getData: () => '', items: [{type:'image/png'}] } });
+    expect(talkSvc.AttachClipboardImage).toHaveBeenCalledWith(root);
+    const drop = (target: string, files: string[]) => (window as any)._wails.dispatchWailsEvent({ name: 'files:dropped', data: { target, files } });
+    drop('other-editor', ['/tmp/unrelated.png']);
+    drop(dialog.id, ['/tmp/design.jpg', '/tmp/broken.png']);
+    expect(talkSvc.AttachImageFile.mock.calls.slice(-2)).toEqual([[root, '/tmp/design.jpg'], [root, '/tmp/broken.png']]);
+    await within(dialog).findByText('Image unreadable');
+    await fireEvent.click(within(dialog).getByRole('button', { name: 'Remove image 3' }));
+    expect(send).toBeDisabled();
+    finish();
+    await waitFor(() => expect(send).toBeEnabled()); // Images alone are a valid comment.
+    expect(await fireEvent.paste(field, { clipboardData: { getData: () => 'ordinary words' } })).toBe(true);
+    await fireEvent.input(field, { target: { value: 'Match this design' } });
+    await fireEvent.click(send);
+    expect(DaemonService.SendFeedback).toHaveBeenCalledWith({
+      session: id, elements: [expect.objectContaining({ selector: '#picked', note: ['Match this design', first, second].join('\n') })],
+    });
+    expect(ssh.view(id).sentThumbs.get(first)).toBe(thumb);
   } finally { preview.close(); refresh.mockRestore(); }
 });
 
@@ -497,7 +544,7 @@ it('navigates to /cp in place, follows the sign-in redirect, and switches stack 
   preview.open(id, site, { prep: { steps: [{ do: 'click', text: 'Prepare' }] } });
   const edit = () => fireEvent.click(screen.getByRole('button', { name: 'Edit preview address' }));
   const submit = async (value: string) => {
-    const input = screen.getByRole('textbox', { name: 'Preview address' });
+    const input = screen.getByRole('combobox', { name: 'Preview address' });
     await fireEvent.input(input, { target: { value } });
     await fireEvent.click(screen.getByRole('button', { name: 'Go' }));
   };

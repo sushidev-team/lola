@@ -115,6 +115,8 @@
       return;
     }
     if (action === "reload") { window.location.reload(); return; }
+    // Only the development build exposes the inspector menu outside Preview.
+    if (action === "preview-inspector") { void Window.OpenDevTools(); return; }
     if (action.startsWith("preview-")) return;
     // Go To has no unsaved work: the Git shortcut can dismiss it and continue.
     if (action === "toggle-git" && nav.overlay === "commands" && !confirm.request && !sessionMenu.request) {

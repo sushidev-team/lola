@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { MAX_PREVIEW_TABS, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, previewAddress, previewIcon } from "./preview.svelte";
+import { MAX_PREVIEW_TABS, VIEWPORTS, devPageURL, previewLayout, parsePick, preview, previewAddress, previewIcon } from "./preview.svelte";
 
 it("loads page icons through the preview origin and falls back to the site's conventional icon", () => {
   const proxy = "http://preview.localhost:5000";
@@ -28,9 +28,13 @@ it("clips what a page claims", () => {
   expect(p?.text.length).toBe(400);
 });
 
-it("sizes the frame by preset", () => {
-  expect(frameStyle(VIEWPORTS.find((v) => v.id === "mobile")!)).toBe("width:390px;height:844px");
-  expect(frameStyle(VIEWPORTS.find((v) => v.id === "desktop")!)).toBe("width:100%;height:100%");
+it("fits the live viewport into the stage while keeping desktop responsive", () => {
+  const [mobile, tablet, desktop] = VIEWPORTS;
+  expect(previewLayout(desktop, 900, 700).style).toBe("width:100%;height:100%");
+  expect(previewLayout(desktop, 600, 700)).toEqual({ scale: 1, style: "width:100%;height:100%" });
+  expect(previewLayout(mobile, 600, 900).style).toBe("width:390px;height:844px");
+  expect(previewLayout(mobile, 600, 422).scale).toBe(0.5);
+  expect(previewLayout(tablet, 410, 900).scale).toBe(0.5);
 });
 
 it("names the page on the dev server's origin, not the proxy's", () => {

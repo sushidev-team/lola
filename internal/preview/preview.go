@@ -42,6 +42,11 @@ import (
 //go:embed picker.js
 var pickerJS string
 
+// DebuggerJS is installed in a preview page when a human opens its tools.
+//
+//go:embed debug.js
+var DebuggerJS string
+
 //go:embed prepare.js
 var prepareJS string
 
@@ -284,6 +289,7 @@ func hostGuard(addr string, next http.Handler) http.Handler {
 				_, _ = io.WriteString(w, xsrfJS)
 			}
 			_, _ = io.WriteString(w, prepareJS)
+			_, _ = io.WriteString(w, DebuggerJS)
 			_, _ = io.WriteString(w, pickerJS)
 			return
 		}

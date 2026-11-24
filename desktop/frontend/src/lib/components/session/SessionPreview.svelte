@@ -15,12 +15,15 @@
   // same deferred hand-off gate as diff comments — this component never types
   // into a pane itself.
   import { onMount, tick, untrack, type Snippet } from "svelte";
-  import { DaemonService, PreviewService } from "@bindings/desktop";
+  import { Events } from "@wailsio/runtime";
+  import { isImagePath } from "$lib/composerpaste";
+  import { DaemonService, PreviewService, TalkService } from "@bindings/desktop";
+  import { ssh } from "$lib/ssh.svelte";
   import { store } from "$lib/store.svelte";
-  import { feedback, type ElementDraft } from "$lib/feedback.svelte";
+  import { elementForAgent, feedback, type ElementDraft } from "$lib/feedback.svelte";
   import "./annotation-editor.css";
   import { devUrlLabel } from "$lib/devurl";
-  import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, frameStyle, parsePick, preview, previewIcon, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
+  import { DEFAULT_VIEWPORT, PICKER_SOURCE, VIEWPORTS, devPageURL, previewLayout, parsePick, preview, previewIcon, type PickedElement, type PreviewRequest, type OpenPreviewTab, type ViewportId } from "$lib/preview.svelte";
   import Button from "../Button.svelte";
   import TestLogins from "./TestLogins.svelte";
   import PreviewLoadBar from "./PreviewLoadBar.svelte";
@@ -28,7 +31,7 @@
 
   // The canvas keys this instance by immutable package and page. A workspace
   // refresh must not restart a live sign-in while the reviewer is looking at it.
-  let { inline, tab, active = true, canComment = true, resumeKey, reviewAction }: { inline?: PreviewRequest; tab?: OpenPreviewTab; reviewAction?: Snippet; active?: boolean; canComment?: boolean; resumeKey?: string } = $props();
+  let { inline, tab, active = true, canComment = true, resumeKey, reviewAction, onPresetChange }: { inline?: PreviewRequest; tab?: OpenPreviewTab; reviewAction?: Snippet; active?: boolean; canComment?: boolean; resumeKey?: string; onPresetChange?: () => void } = $props();
   const inlinePage = untrack(() => inline);
   const req = $derived(inlinePage ?? tab?.request);
 
@@ -46,14 +49,23 @@
   let note = $state("");
   let sending = $state(false);
   const commentId = $props.id();
+  type CommentImage = { id: number; path?: string; thumb?: string; error?: string };
+  let images = $state.raw<CommentImage[]>([]);
+  let imageSeq = 0, commentSeq = $state(0);
+  const dropId = $derived("preview-comment-" + commentId + "-" + commentSeq);
+  const imagePaths = $derived(images.flatMap(im => im.path ? [im.path] : []));
+  const readyToSend = $derived((!!note.trim() || images.length > 0) && images.every(im => im.path));
+  let editingDraft = $state.raw<ElementDraft>();
+  const modified = $derived(note.trim() !== (editingDraft?.note ?? "") ||
+    images.length !== (editingDraft?.images?.length ?? 0) || images.some((im, i) => im.path !== editingDraft?.images?.[i]));
   let editor = $state<HTMLDivElement>();
   let stage = $state<HTMLDivElement>();
+  let stageWidth = $state(0), stageHeight = $state(0);
   let confirmDiscard = $state(false);
   let saveError = $state("");
   type Rect = { x: number; y: number; w: number; h: number };
   type CommentRect = Rect & { number: number };
   let bounds = $state<Rect>();
-  let editingDraft = $state.raw<ElementDraft>();
   const drafts = $derived(inlinePage ? feedback.elementsFor(inlinePage.sessionId) : []);
   let commentRects = $state.raw<CommentRect[]>([]);
   let revision = 0;
@@ -61,13 +73,13 @@
   let position = $state({ left: 12, top: 12 });
   $effect(() => {
     const rect = editingDraft ? commentRects.find(r => drafts[r.number - 1] === editingDraft) : bounds;
-    const popup = editor, area = stage, iframe = frame;
+    const popup = editor, area = stage, iframe = frame, scale = layout.scale;
     if (!popup || !area || !iframe) return;
     function align() {
       const a = area!.getBoundingClientRect(), f = iframe!.getBoundingClientRect();
       const w = popup!.offsetWidth, h = popup!.offsetHeight, gap = 12;
-      const x = f.left - a.left + (rect?.x ?? 0), y = f.top - a.top + (rect?.y ?? 0);
-      const right = x + (rect?.w ?? 0) + gap, below = y + (rect?.h ?? 0) + gap;
+      const x = f.left - a.left + (rect?.x ?? 0) * scale, y = f.top - a.top + (rect?.y ?? 0) * scale;
+      const right = x + (rect?.w ?? 0) * scale + gap, below = y + (rect?.h ?? 0) * scale + gap;
       const beside = right + w <= a.width - gap || x - w >= 2 * gap;
       const left = beside ? (right + w <= a.width - gap ? right : x - w - gap) : x;
       const top = beside ? y : below + h <= a.height - gap ? below : y - h - gap;
@@ -209,6 +221,7 @@
   const preparing = $derived(replay && !load.route && !prepared && !stalled && !error);
 
   const vp = $derived(VIEWPORTS.find((v) => v.id === viewport) ?? VIEWPORTS[2]);
+  const layout = $derived(previewLayout(vp, stageWidth, stageHeight));
   const session = $derived(req ? store.sessions.find((s) => s.id === req.sessionId) : undefined);
   // A retained document can still run scripts after its listener is retired.
   // Remove it when a previously advertised session or stack origin disappears.
@@ -247,6 +260,7 @@
     src = "";
     error = "";
     picked = null;
+    images = [];
     editingDraft = undefined;
     picking = false;
     pickerReady = false;
@@ -405,8 +419,23 @@
     win.postMessage({ target: PICKER_SOURCE, type: "test-login", ...(automatic && { automatic: true }), documentId: doc, username: account.username, password: account.password }, origin);
   }
 
+  const commentAvailable = $derived(active && pickerReady && !preparing && !picked && canComment && !loginsOpen);
+  $effect(() => {
+    if (documentId && frame?.contentWindow) frame.contentWindow.postMessage({
+      target: PICKER_SOURCE, type: "comment-shortcut", documentId, enabled: commentAvailable,
+    }, frameOrigin);
+  });
+  export function commentKeyShortcut(e: KeyboardEvent) {
+    if (!commentAvailable || e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.repeat || e.key !== "c" ||
+        e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || e.composedPath().some(el =>
+          el instanceof HTMLElement && (el.isContentEditable || el.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], [role="combobox"], [role="searchbox"]')))) return;
+    e.preventDefault();
+    e.stopPropagation();
+    togglePick();
+  }
+
   function togglePick() {
-    if (!pickerReady || picked || !canComment) return;
+    if (!commentAvailable) return;
     tell(!picking);
   }
 
@@ -417,6 +446,10 @@
       const d = e.data as { source?: string; type?: string; id?: number; documentId?: string; picking?: boolean; url?: string; found?: unknown; waited?: unknown; i?: unknown; failed?: { index?: unknown; step?: unknown; why?: unknown } | null } | null;
       if (d?.source === PICKER_SOURCE && d.type === "page-loading" && documentId && d.documentId === documentId && typeof e.data.loading === "boolean") {
         loadingPage = e.data.loading;
+      }
+      if (d?.source === PICKER_SOURCE && d.type === "comment-shortcut" && d.documentId === documentId && commentAvailable) {
+        togglePick();
+        return;
       }
       if (active && tab && pickerReady && d?.source === PICKER_SOURCE && d.documentId === documentId) {
         if (d.type === "new-tab" && typeof d.url === "string") {
@@ -522,7 +555,44 @@
     };
   });
 
+  async function attachImage(file?: string) {
+    if (!picked || !active || !canComment || sending) return;
+    const id = ++imageSeq, root = session?.attachmentRoot || session?.worktree || "";
+    images = [...images, { id }];
+    let result: CommentImage;
+    try {
+      const attachment = file ? await TalkService.AttachImageFile(root, file) : await TalkService.AttachClipboardImage(root);
+      result = { id, path: attachment.path, thumb: attachment.thumb };
+    } catch (e) {
+      result = { id, error: e instanceof Error ? e.message : String(e) };
+    }
+    // A late copy belongs only to its original tile, even if the editor reopened.
+    if (images.some(im => im.id === id)) images = images.map(im => im.id === id ? result : im);
+  }
+
+  function pasteComment(e: ClipboardEvent) {
+    const data = e.clipboardData;
+    if (!data) return;
+    const text = data.getData("text/plain");
+    const hasImage = Array.from(data.items ?? []).some(item => item.type.startsWith("image/"));
+    if (text && !hasImage && !isImagePath(text)) return;
+    e.preventDefault();
+    void attachImage(!hasImage && text ? text.trim() : undefined);
+  }
+
+  $effect(() => {
+    if (!picked || !active || !canComment) return;
+    const target = dropId;
+    return Events.On("files:dropped", e => {
+      if (e.data?.target !== target || target !== dropId) return;
+      for (const path of e.data.files ?? []) {
+        if (isImagePath(path)) void attachImage(path);
+      }
+    });
+  });
   function openComment(p: PickedElement, draft?: ElementDraft) {
+    commentSeq++;
+    images = (draft?.images ?? []).map(path => ({ id: ++imageSeq, path, thumb: req && ssh.view(req.sessionId).sentThumbs.get(path) }));
     picked = p;
     editingDraft = draft;
     bounds = undefined;
@@ -541,14 +611,15 @@
   function finishComment() {
     tell(false);
     picked = null;
+    images = [];
     editingDraft = undefined;
     note = "";
-    void tick().then(() => surface?.querySelector<HTMLButtonElement>('[aria-label="Inspect element"]')?.focus({ preventScroll: true }));
+    void tick().then(() => surface?.querySelector<HTMLButtonElement>('[aria-label="Comment on element"]')?.focus({ preventScroll: true }));
   }
 
   function closeComment() {
     if (sending) return;
-    if (note.trim() !== (editingDraft?.note ?? "")) confirmDiscard = true;
+    if (modified) confirmDiscard = true;
     else finishComment();
   }
 
@@ -573,20 +644,24 @@
   }
 
   async function send() {
-    if (!req || !picked || !canComment || sending || !note.trim()) return;
+    if (!req || !picked || !canComment || sending || !readyToSend) return;
     sending = true;
-    const sentPick = picked, sentNote = note;
-    const element = { url: devPageURL(picked.url, req.url), selector: picked.selector, html: picked.html, text: picked.text, note: note.trim() };
+    const sentPick = picked, sentNote = note, sentImages = images, sessionId = req.sessionId;
+    const element = { url: devPageURL(picked.url, req.url), selector: picked.selector, html: picked.html, text: picked.text, note: note.trim(), ...(imagePaths.length ? { images: imagePaths } : {}) };
     try {
+      const message = elementForAgent(element);
       if (inlinePage) {
-        if (!editingDraft || editingDraft.note !== note.trim()) {
+        if (modified) {
           feedback.addElement(req.sessionId, { ...element, reviewKey: resumeKey }, editingDraft);
           store.setFlash("Comment saved to review feedback.", "good");
         }
       } else {
-        const r = await DaemonService.SendFeedback({ session: req.sessionId, elements: [element] });
+        const r = await DaemonService.SendFeedback({ session: req.sessionId, elements: [message] });
         store.setFlash(r?.delivered ? "element sent to the agent" : "element queued — it is sent when the agent is at its prompt", r?.delivered ? "good" : "warn");
         void store.refresh();
+      }
+      for (const image of sentImages) {
+        if (image.path && image.thumb) ssh.view(sessionId).sentThumbs.set(image.path, image.thumb);
       }
       if (picked === sentPick && note === sentNote) finishComment();
     } catch (e) {
@@ -596,6 +671,11 @@
     }
   }
 
+  export function debugTarget() {
+    return frame?.contentWindow && frameOrigin && documentId ? { frame: frame.contentWindow, origin: frameOrigin, documentId } : null;
+  }
+  export function viewportSize() { return { width: vp.width ?? stageWidth, height: vp.height ?? stageHeight }; }
+  export function useResponsiveWidth() { viewport = "desktop"; }
   export function device() { return viewport; }
 
   function replayView() {
@@ -617,7 +697,8 @@
   {#if stalled}<p class="text-sm text-warn" role="status">{documentId ? "The page did not finish its saved steps. Retry to start again." : "The dev page did not connect to the preview. Check that its server is running, then retry."}</p>{/if}
 {/snippet}
 {#if req}
-    <div bind:this={surface} tabindex="-1" class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] outline-none" data-session-preview>
+    <!-- svelte-ignore a11y_no_static_element_interactions -->
+    <div bind:this={surface} onkeydown={commentKeyShortcut} tabindex="-1" class="relative grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)_auto] outline-none" data-session-preview>
       {#if inlinePage}
         <div class="review-issues">{@render issues()}</div>
       {:else if req.caption || replay}
@@ -627,17 +708,17 @@
             </div>
       {/if}
 
-      <div bind:this={stage} class="row-start-2 relative min-h-0 min-w-0">
+      <div bind:this={stage} bind:clientWidth={stageWidth} bind:clientHeight={stageHeight} class="row-start-2 relative min-h-0 min-w-0">
         {#if active && loadingPage && !error}<PreviewLoadBar />{/if}
-        <!-- The iframe is capped to the stage. Keep scrolling inside the page so
+        <!-- Fit the frame and its annotations together. Keep scrolling inside the page so
              WebKit has no outer scroll offset to apply when targeting a click. -->
         <div class="absolute inset-0 grid place-items-center bg-canvas grid-cols-[minmax(0,1fr)] grid-rows-[minmax(0,1fr)] {src && !error ? 'overflow-clip' : 'overflow-auto'}">
           {#if error}
             <p class="text-sm text-bad" role="alert">{error} <Button size="xs" onclick={() => load = { route: load.route }}>Retry</Button></p>
           {:else if src}
-            <iframe bind:this={frame} {src} onload={frameLoaded} title="Preview of {devUrlLabel(req.url)}" class="col-start-1 row-start-1 max-h-full max-w-full border-0 bg-white" style={frameStyle(vp)} sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
+            <iframe bind:this={frame} {src} onload={frameLoaded} title="Preview of {devUrlLabel(req.url)}" class="col-start-1 row-start-1 max-w-none border-0 bg-white" style={layout.style} sandbox="allow-scripts allow-same-origin allow-forms allow-popups"></iframe>
             {#if inlinePage && commentRects.length && !preparing}
-              <div class="comment-layer" style={frameStyle(vp)}>
+              <div class="comment-layer" style={layout.style}>
                 {#each commentRects as r,i}
                   {@const draft = drafts[r.number - 1]}
                   {@const slot = commentRects.slice(0, i).filter(other => Math.abs(other.x - r.x) < 24 && Math.abs(other.y - r.y) < 24).length}
@@ -657,13 +738,13 @@
           <div role="group" aria-label="Viewport size" class="mr-0.5 flex items-center border-r border-edge pr-1">
             {#each VIEWPORTS as preset (preset.id)}
               {@const label = preset.id === "desktop" ? "Full width" : preset.label}
-              <Button icon size="sm" selected={viewport === preset.id} aria-pressed={viewport === preset.id} aria-label={label} title={preset.width ? `${label} · ${preset.width} × ${preset.height}` : label} onclick={() => viewport = preset.id}>
+              <Button icon size="sm" selected={viewport === preset.id} aria-pressed={viewport === preset.id} aria-label={label} title={preset.width ? `${label} · ${preset.width} × ${preset.height}` : label} onclick={() => { viewport = preset.id; onPresetChange?.(); }}>
                 <Icon name={viewportIcons[preset.id]} size={15} />
               </Button>
             {/each}
           </div>
-          <Button size="sm" selected={picking} disabled={!pickerReady || preparing || !!picked || !canComment} aria-label="Inspect element" title="Inspect an element to send feedback" onclick={togglePick}>
-            <Icon name="square-mouse-pointer" size={15} /><span>Inspect</span>
+          <Button size="sm" selected={picking} disabled={!pickerReady || preparing || !!picked || !canComment} aria-label="Comment on element" aria-keyshortcuts="c" title="Comment on an element · C" onclick={togglePick}>
+            <Icon name="square-mouse-pointer" size={15} /><span>Comment</span>
           </Button>
           {#if tab}
             <div bind:this={loginTrigger}>
@@ -695,7 +776,7 @@
           </div>
         {/if}
         {#if picked}
-          <div class="annotation-editor" bind:this={editor} role="dialog" aria-label="Element comment" tabindex="-1" style:left={`${position.left}px`} style:top={`${position.top}px`} onkeydown={commentKey}>
+          <div class="annotation-editor" id={dropId} data-file-drop-target onpaste={pasteComment} bind:this={editor} role="dialog" aria-label="Element comment" tabindex="-1" style:left={`${position.left}px`} style:top={`${position.top}px`} onkeydown={commentKey}>
             <div class="editor-heading">
               <label for={commentId}>Comment{editingDraft && drafts.includes(editingDraft) ? ` ${drafts.indexOf(editingDraft) + 1}` : ""}<span class="editor-side">Live</span></label>
               <div class="editor-controls">
@@ -705,14 +786,25 @@
                 <Button icon size="xs" disabled={sending} aria-label="Close comment" title="Close comment · Esc" onclick={closeComment}><Icon name="x" size={14} /></Button>
               </div>
             </div>
-            <textarea id={commentId} rows="3" maxlength="2000" placeholder="What should change?" aria-label="Element comment" bind:value={note}></textarea>
+            <textarea id={commentId} rows="3" maxlength="2000" placeholder="What should change? Paste or drop images here." aria-label="Element comment" bind:value={note}></textarea>
+            {#if images.length}
+              <ul class="comment-images" aria-label="Attached images">
+                {#each images as im, i (im.id)}
+                  <li>
+                    {#if im.thumb}<img src={im.thumb} alt={"Image " + (i + 1)}/>{/if}
+                    <span class:text-warn={!!im.error} role="status">{im.error || (im.path ? "Image " + (i + 1) : "Preparing image " + (i + 1) + "…")}</span>
+                    <Button icon size="xs" disabled={sending} aria-label={"Remove image " + (i + 1)} onclick={() => images = images.filter(item => item.id !== im.id)}><Icon name="x" size={12}/></Button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
             {#if confirmDiscard}<p class="save-question">Save changes?</p>{/if}
             <div class="editor-actions">
               {#if confirmDiscard}
                 <Button size="xs" onclick={() => confirmDiscard = false}>Keep editing</Button>
                 <Button size="xs" variant="danger" onclick={finishComment}>Discard</Button>
               {/if}
-              <Button variant="primary" size="sm" disabled={!note.trim()} loading={sending} aria-keyshortcuts="Meta+Enter Control+Enter" onclick={send}><Icon name="check" size={14} />{inlinePage ? editingDraft?.note === note.trim() ? "Done" : "Save" : "Send to agent"}</Button>
+              <Button variant="primary" size="sm" disabled={!readyToSend || !canComment} loading={sending} aria-keyshortcuts="Meta+Enter Control+Enter" onclick={send}><Icon name="check" size={14} />{inlinePage ? editingDraft && !modified ? "Done" : "Save" : "Send to agent"}</Button>
             </div>
             {#if saveError}<p role="status" class="mt-2 text-xs text-warn">{saveError}</p>{/if}
           </div>
@@ -722,7 +814,12 @@
 {/if}
 
 <style>
-  .comment-layer { grid-area:1 / 1; position:relative; max-width:100%; max-height:100%; overflow:hidden; pointer-events:none; }
+  .annotation-editor:global(.file-drop-target-active) {outline:2px solid var(--color-accent);outline-offset:-2px}
+  .comment-images {display:grid;gap:4px;margin:0 0 8px;padding:0;list-style:none}
+  .comment-images li {display:flex;align-items:center;gap:8px;padding:3px 5px;border-radius:4px;background:var(--color-canvas)}
+  .comment-images li span {flex:1;min-width:0;font-size:12px;overflow-wrap:anywhere}
+  .comment-images img {width:36px;height:32px;object-fit:contain}
+  .comment-layer { grid-area:1 / 1; position:relative; overflow:hidden; pointer-events:none; }
   .comment-border { position:absolute; border:1px solid rgb(124 92 255 / 55%); border-radius:3px; background:rgb(124 92 255 / 3%); }
   .comment-border.focused { border:2px solid #7c5cff; background:rgb(124 92 255 / 15%); }
   .comment-pin { position:absolute; z-index:1; display:grid; place-items:center; width:22px; height:22px; border:1px solid var(--color-accent); border-radius:50%; background:var(--color-panel); color:var(--color-accent); font-size:12px; font-weight:650; font-variant-numeric:tabular-nums; box-shadow:0 1px 4px #0003; pointer-events:auto; cursor:pointer; }

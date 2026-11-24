@@ -422,7 +422,7 @@ export function isFrameLine(line: string): boolean {
 
 /** The newest human message not yet delivered, for ↑ on an empty field. */
 export function queuedItems(items: readonly SSHTimelineItem[]): SSHTimelineItem[] {
-  return items.filter((i) => i.human && !i.human.delivered && !i.human.recalled && (i.human.text ?? "").trim());
+  return items.filter((i) => i.human && i.human.origin !== "preview" && !i.human.delivered && !i.human.recalled && (i.human.text ?? "").trim());
 }
 
 /** The field's empty line says who it reaches, and when it will. */

@@ -137,6 +137,8 @@
     </div>
     {#if h.recalled}
       <p class="mt-1 text-sm text-faint">Recalled</p>
+    {:else if h.origin === "preview"}
+      <p class="mt-1 text-sm text-faint">Preview comment · {h.delivered ? "Delivered" : "Queued"}</p>
     {:else if h.returned}
       <p class="mt-1 flex items-center justify-start gap-2 text-sm text-faint">
         Returned to {agent}'s prompt

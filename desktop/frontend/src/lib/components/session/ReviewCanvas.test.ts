@@ -7,7 +7,7 @@ import { feedback } from '$lib/feedback.svelte';
 import { markLocation, reviewSections } from '$lib/reviewmaterial';
 const image = vi.mocked(DaemonService.ReviewPackageImage);
 const pkg = {id:'package1',session:'s',screens:[{title:'Settings',before:'before',after:'after',caption:'A clearer form'},{title:'Phone',after:'phone'}]} as never;
-beforeEach(()=>{vi.stubGlobal('ResizeObserver',class {observe(){} disconnect(){}});localStorage.clear(); image.mockReset(); image.mockResolvedValue({dataURL:'data:image/png;base64,aGVsbG8='});});
+beforeEach(()=>{localStorage.clear(); image.mockReset(); image.mockResolvedValue({dataURL:'data:image/png;base64,aGVsbG8='});});
 afterEach(()=>{cleanup();vi.unstubAllGlobals();});
 
 it('compares with a keyboard range, switches views, and handles screens with no baseline',async()=>{
@@ -152,7 +152,7 @@ it('keeps area comments anchored while zooming and scrolling, including an open 
   const resizeCallbacks:Array<()=>void>=[];
   vi.stubGlobal('ResizeObserver',class {
     constructor(callback:()=>void){resizeCallbacks.push(callback);}
-    observe(){} disconnect(){}
+    observe(){} unobserve(){} disconnect(){}
   });
   const onComment=vi.fn().mockReturnValue(true);
   render(ReviewCanvas,{pkg,onComment});

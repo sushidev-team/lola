@@ -429,7 +429,7 @@ function humanShown(i: SSHTimelineItem): boolean {
   const h = i.human;
   if (!h) return false;
   if (!h.text?.trim() && !h.transcript) return false;
-  return !!h.delivered || !!h.recalled || !!h.returned;
+  return h.origin === "preview" || !!h.delivered || !!h.recalled || !!h.returned;
 }
 
 function isLifeLabel(label: string): boolean {

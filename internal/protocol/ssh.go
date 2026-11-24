@@ -174,6 +174,7 @@ const (
 
 // Human message origins: what a human timeline item came from.
 const (
+	SSHHumanPreview  = "preview"  // submitted from the preview comment tool
 	SSHHumanSay      = "say"      // typed in the composer
 	SSHHumanAnswered = "answer"   // answered a question element
 	SSHHumanHandback = "handback" // said while handing the wheel back

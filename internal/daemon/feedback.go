@@ -37,6 +37,7 @@ import (
 	"github.com/sushidev-team/lola/internal/preview"
 	"github.com/sushidev-team/lola/internal/protocol"
 	"github.com/sushidev-team/lola/internal/session"
+	"github.com/sushidev-team/lola/internal/sshstore"
 	"github.com/sushidev-team/lola/internal/state"
 )
 
@@ -146,8 +147,16 @@ func (d *Daemon) handleFeedback(ctx context.Context, a protocol.FeedbackArgs) (p
 		return protocol.FeedbackData{}, err
 	}
 
+	var timeline *sshstore.Store
+	var lastItem string
+	if len(a.Elements) > 0 {
+		timeline, err = d.sshStore(session.BaseID(id), true)
+		if err != nil {
+			return protocol.FeedbackData{}, err
+		}
+	}
 	var full bool
-	d.sessions.Update(id, func(cur *session.Session) bool {
+	_, exists := d.sessions.Update(id, func(cur *session.Session) bool {
 		next := block
 		if cur.PendingFeedback != "" {
 			next = cur.PendingFeedback + "\n\n" + block
@@ -156,18 +165,49 @@ func (d *Daemon) handleFeedback(ctx context.Context, a protocol.FeedbackArgs) (p
 			full = true
 			return false
 		}
+		if timeline != nil {
+			// Reserve rows only after admission, under the same lock as the queue.
+			// Disk I/O takes place once the session store lock has been released.
+			timeline.Volatile(func(st *sshstore.State) bool {
+				now := time.Now()
+				for _, el := range a.Elements {
+					item := st.AddHuman(protocol.SSHHumanMessage{
+						Origin: protocol.SSHHumanPreview, Text: clipRunes(strings.TrimSpace(el.Note), feedbackMaxBodyRunes),
+					}, now)
+					cur.PendingFeedbackItems = append(cur.PendingFeedbackItems, item.ID)
+					lastItem = item.ID
+				}
+				return true
+			})
+		}
 		cur.PendingFeedback = next
 		return true
 	})
+	if !exists {
+		return protocol.FeedbackData{}, fmt.Errorf("unknown session %s", id)
+	}
 	if full {
 		return protocol.FeedbackData{}, fmt.Errorf(
 			"%s already has too much undelivered feedback queued — wait for the agent to pick it up", id)
+	}
+	if timeline != nil {
+		if err := timeline.Flush(); err != nil {
+			d.logf("", "feedback: persist Conversation rows: %v", err)
+		}
 	}
 	if err := d.sessions.Save(); err != nil {
 		d.logf("", "feedback: persist sessions: %v", err)
 	}
 
-	if d.deliverFeedback(ctx, id) {
+	delivered := d.deliverFeedback(ctx, id)
+	if !delivered && timeline != nil {
+		// The hook or observer may have delivered this batch before our own attempt.
+		timeline.View(func(st *sshstore.State) {
+			item := st.Item(lastItem)
+			delivered = item != nil && item.Human != nil && item.Human.Delivered
+		})
+	}
+	if delivered {
 		return protocol.FeedbackData{Delivered: true, Message: "sent to the agent"}, nil
 	}
 	d.logf("", "feedback: %s queued — the agent is not resting at its prompt", id)
@@ -185,7 +225,8 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 		name:  "feedback",
 		field: func(s *session.Session) *string { return &s.PendingFeedback },
 		wrap:  feedbackMessage,
-		done:  "delivered the human's diff review to the agent",
+		done:  "delivered the human's feedback to the agent",
+		items: func(s *session.Session) *[]string { return &s.PendingFeedbackItems },
 		label: feedbackLabel,
 	})
 }
@@ -196,6 +237,7 @@ func (d *Daemon) deliverFeedback(ctx context.Context, id string) bool {
 type queuedText struct {
 	name  string
 	field func(*session.Session) *string
+	items func(*session.Session) *[]string // optional Conversation rows belonging to this batch
 	wrap  func(string) string
 	done  string
 	// took and sent are optional, for a queue with a second delivery path. took
@@ -264,7 +306,7 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 		if !admit(*cur) || *f == "" {
 			return false
 		}
-		text, *f = *f, ""
+		text = *f
 		cur.AtPrompt = false
 		// CLAIM the prompt in the same atomic step: handoffDeliverable admits
 		// AgentIdle whatever AtPrompt says, so clearing AtPrompt alone left the
@@ -277,6 +319,14 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 		note = noteFor(*cur, "")
 		if q.label != nil {
 			note.Label = q.label(*cur, text)
+		}
+		if q.items != nil {
+			note.Items = *q.items(cur)
+		}
+		// Keep a batch with Conversation receipts durable until typing succeeds.
+		// Other submissions may append and save the session during the send.
+		if len(note.Items) == 0 {
+			*f = ""
 		}
 		return true
 	})
@@ -291,6 +341,9 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 		// Unlike a review hand-off (which other sinks also received), this text
 		// exists nowhere else: put it back in front of anything queued since.
 		d.sessions.Update(id, func(cur *session.Session) bool {
+			if q.items != nil && len(note.Items) > 0 {
+				return false // the pending prefix and its rows are already intact
+			}
 			f := q.field(cur)
 			if *f != "" {
 				*f = text + "\n\n" + *f
@@ -306,6 +359,19 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 		}
 		return false
 	}
+	if q.items != nil && len(note.Items) > 0 {
+		d.sessions.Update(id, func(cur *session.Session) bool {
+			f, items := q.field(cur), q.items(cur)
+			remainder, found := strings.CutPrefix(*f, text)
+			if !found || len(*items) < len(note.Items) || (*items)[0] != note.Items[0] {
+				return false
+			}
+			*f = strings.TrimPrefix(remainder, "\n\n")
+			*items = (*items)[len(note.Items):]
+			return true
+		})
+		d.markFeedbackDelivered(note.Session, note.Items)
+	}
 	if q.sent != nil {
 		q.sent(id, text, true)
 	}
@@ -314,6 +380,26 @@ func (d *Daemon) deliverQueued(ctx context.Context, id string, q queuedText) boo
 	}
 	d.logf("", "%s: %s %s", q.name, id, q.done)
 	return true
+}
+
+func (d *Daemon) markFeedbackDelivered(id string, items []string) {
+	store, err := d.sshStore(id, true)
+	if err == nil {
+		err = store.Update(func(st *sshstore.State) error {
+			now := time.Now()
+			for _, id := range items {
+				if row := st.Item(id); row != nil && row.Human != nil && row.Human.Origin == protocol.SSHHumanPreview {
+					row.Human.Delivered, row.Human.DeliveredAt, row.Human.Via = true, now, protocol.SSHViaPrompt
+					st.Touch(row)
+				}
+			}
+			store.Prune(st)
+			return nil
+		})
+	}
+	if err != nil {
+		d.logf("", "feedback: record delivery for %s: %v", id, err)
+	}
 }
 
 // feedbackMessage wraps the queued comment blocks in lola's own instruction

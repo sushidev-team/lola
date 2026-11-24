@@ -106,12 +106,21 @@
 
   function swallow(e) { if (target(e)) { e.preventDefault(); e.stopPropagation(); } }
 
-  // Let the page handle its own Escape first (for example a combobox).
+  var commentShortcut = false;
+  // Give the page first refusal on unmodified shortcuts, including its editors.
   window.addEventListener("keydown", function (e) {
-    if (e.key !== "Escape" || e.repeat || e.defaultPrevented || e.isComposing ||
+    if (e.repeat || e.defaultPrevented || e.isComposing || e.keyCode === 229 ||
         !e.isTrusted || e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+    if (e.key === "c" && commentShortcut && document.designMode !== "on" && !e.composedPath().some(function (el) {
+      return el instanceof HTMLElement && (el.isContentEditable || el.matches('input,textarea,select,[contenteditable]:not([contenteditable="false"]),[role="textbox"],[role="combobox"],[role="searchbox"]'));
+    })) {
+      e.preventDefault();
+      post({ type: "comment-shortcut", documentId: documentId });
+      return;
+    }
+    if (e.key !== "Escape") return;
     e.preventDefault();
-    set(false);
+    if (picking) { set(false); return; }
     post({ type: "escape" });
   });
 
@@ -384,8 +393,31 @@
     form.requestSubmit(button);
     return "submitted";
   }
+  var closeDebugger = function () {}, cancelDebugPick = function () {};
+  window.addEventListener("pagehide", function () { closeDebugger(); });
   window.addEventListener("message", function (e) {
     if (e.source !== window.parent || !e.data || e.data.target !== SRC) return;
+    // Only Lola's desktop origin can acquire a console for this frame.
+    // The document-bound port carries replies privately, including after navigation.
+    if (e.data.type === "debug-connect" && e.data.documentId === documentId &&
+        /^wails:\/\/localhost(?::[0-9]+)?$/.test(e.origin) && e.ports[0]) {
+      closeDebugger();
+      set(false);
+      var port = e.ports[0], dirtyTimer = 0;
+      var debug = lolaPreviewDebugger(function () {
+        if (!dirtyTimer) dirtyTimer = setTimeout(function () { dirtyTimer = 0; port.postMessage({dirty:true}); }, 80);
+      });
+      cancelDebugPick = function () { debug({ op: "cancel-pick" }); };
+      closeDebugger = function () { cancelDebugPick = function () {}; debug({ op: "close" }); clearTimeout(dirtyTimer); port.close(); closeDebugger = function () {}; };
+      port.onmessage = function (event) {
+        if (event.data.op === "close") { closeDebugger(); return; }
+        if (event.data.op === "pick" && event.data.on) set(false);
+        try { port.postMessage({ id:event.data.id, result:debug(event.data) }); }
+        catch (err) { port.postMessage({ id:event.data.id, error:String(err) }); }
+      };
+      port.postMessage({ ready:true });
+    }
+    if (e.data.type === "comment-shortcut" && e.data.documentId === documentId) commentShortcut = e.data.enabled === true;
     if (e.data.type === "watch-login" && e.data.documentId === documentId) watchLogin(e.data.on);
     if (e.data.type === "test-login" && e.data.documentId === documentId) {
       var result = "unavailable";
@@ -400,7 +432,7 @@
       window.navigation.back();
     }
     if (e.data.type === "comment-anchors" && e.data.documentId === documentId) watchComments(e.data);
-    if (e.data.type === "pick") { clearSelection(); set(!!e.data.on); }
+    if (e.data.type === "pick") { if (e.data.on) cancelDebugPick(); clearSelection(); set(!!e.data.on); }
     if (e.data.type === "check-session") {
       var check = e.data, target;
       try { target = new URL(check.path, location.origin); } catch (err) { return; }

@@ -1691,6 +1691,7 @@ func (d *Daemon) adoptNativeSessions(ctx context.Context) {
 				s.ReviewWatermarks = prev.ReviewWatermarks
 				s.PendingHandoffs = prev.PendingHandoffs
 				s.PendingFeedback = prev.PendingFeedback
+				s.PendingFeedbackItems = prev.PendingFeedbackItems
 				s.PendingBroadcast = prev.PendingBroadcast
 				s.PendingSSH = prev.PendingSSH
 				if s.ContextKey == "" {

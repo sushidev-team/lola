@@ -25,7 +25,18 @@ export type Draft = {
 
 const KEY = "lola.diff.drafts";
 
-export type ElementDraft = FeedbackElement & { reviewKey?: string };
+export type ElementDraft = FeedbackElement & { reviewKey?: string; images?: string[] };
+
+// Conversation and the agent both recognize the session-local image paths in
+// the message. Keep them separate from editable prose until the note is sent.
+export function elementForAgent({ reviewKey, images, ...element }: ElementDraft): FeedbackElement {
+  if (!images?.length) return element;
+  const note = [element.note, ...images].filter(Boolean).join("\n");
+  // renderFeedbackElement clips at feedbackMaxBodyRunes. Never truncate a path.
+  if (Array.from(note).length > 4000) throw new Error("Send these images in smaller batches so each attachment reaches the agent.");
+  return { ...element, note };
+}
+
 type Saved = Record<string, { drafts: Draft[]; note: string; elements?: ElementDraft[] }>;
 
 function load(): Saved {
@@ -144,7 +155,7 @@ class Feedback {
     const elements = this.elementsFor(id);
     this.sending.set(id, true);
     try {
-      const r = await DaemonService.SendFeedback({ session: id, comments, note: sentNote, ...(elements.length ? { elements: elements.map(({ reviewKey, ...element }) => element) } : {}) });
+      const r = await DaemonService.SendFeedback({ session: id, comments, note: sentNote, ...(elements.length ? { elements: elements.map(elementForAgent) } : {}) });
       const remaining = this.elementsFor(id).filter(e => !elements.includes(e));
       if (remaining.length) this.elements.set(id, remaining);
       else this.elements.delete(id);

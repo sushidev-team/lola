@@ -360,6 +360,15 @@ func installAppMenu(app *application.App, zoom *zoomController) {
 	}
 	menu.AddRole(application.EditMenu)
 	menu.AddRole(application.ViewMenu)
+	// Route ⌥⌘I through AppKit so Lola can toggle its own preview sidebar
+	// even while a page in a separate webview has focus. Reuse Wails' development-build item to avoid a duplicate chord.
+	inspector := menu.FindByRole(application.OpenDevTools)
+	if inspector == nil {
+		view := menu.FindByRole(application.ViewMenu).GetSubmenu()
+		inspector = view.Add("Toggle Preview Developer Tools").SetAccelerator("CmdOrCtrl+OptionOrAlt+i").SetEnabled(false)
+		previewItems = append(previewItems, inspector)
+	}
+	inspector.OnClick(func(*application.Context) { app.Event.Emit(evtSessionAction, actionPreviewInspector) })
 	talkItem := newSessionMenu(app, menu.AddSubmenu("Session"))
 	app.Event.On(evtPreviewOpen, func(e *application.CustomEvent) {
 		open, ok := e.Data.(bool)
@@ -607,6 +616,7 @@ const (
 	actionPreviewDuplicate = "preview-duplicate"
 	actionPreviewPrevious  = "preview-previous"
 	actionPreviewNext      = "preview-next"
+	actionPreviewInspector = "preview-inspector"
 	actionKill             = "kill"
 	actionNext             = "next"
 	actionStop             = "stop"

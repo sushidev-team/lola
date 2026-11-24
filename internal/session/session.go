@@ -534,6 +534,9 @@ type Session struct {
 	// PendingHandoffs; kept apart from that map because it has no review
 	// provider behind it and must survive one being reconfigured.
 	PendingFeedback string `json:"pending_feedback,omitempty"`
+	// PendingFeedbackItems identifies the Conversation rows for the preview
+	// comments in PendingFeedback. Older queues contain only the rendered text.
+	PendingFeedbackItems []string `json:"pending_feedback_items,omitempty"`
 
 	// AutomationDeferredReason explains why lola left the input untouched.
 	// Cleared on the next successful prompt proof; also deduplicates notices.

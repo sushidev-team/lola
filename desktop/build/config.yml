@@ -26,6 +26,7 @@ dev_mode:
       - '*_test.go'
     watched_extension:
       - '*.go'
+      - '*.m'
       - '*.js'
       - '*.ts'
     git_ignore: true

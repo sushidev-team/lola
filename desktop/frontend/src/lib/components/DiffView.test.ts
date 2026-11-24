@@ -243,9 +243,10 @@ describe("DiffView", () => {
     feedback.add("s1", { path: "a.go", side: "new", line: 1, endLine: 1, quote: "", body: "sent" });
     feedback.setNote("s1", "note v1");
     const picked = { selector: "#settings", note: "Even out the gaps" };
-    feedback.addElement("s1", picked);
+    const image = "/worktree/.lola/images/paste-1234.png";
+    feedback.addElement("s1", { ...picked, images: [image] });
     const sending = feedback.send("s1");
-    expect(SendFeedback).toHaveBeenCalledWith(expect.objectContaining({ elements: [picked], note: "note v1" }));
+    expect(SendFeedback).toHaveBeenCalledWith(expect.objectContaining({ elements: [{ ...picked, note: picked.note + "\n" + image }], note: "note v1" }));
     feedback.addElement("s1", { selector: "#profile", note: "Keep this one" });
     feedback.add("s1", { path: "a.go", side: "new", line: 2, endLine: 2, quote: "", body: "late" });
     feedback.setNote("s1", "note v2");

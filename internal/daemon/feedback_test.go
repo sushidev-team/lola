@@ -350,3 +350,94 @@ func TestRenderFeedbackElementRefusals(t *testing.T) {
 		t.Error("too many elements accepted")
 	}
 }
+
+func TestPreviewCommentsKeepIndividualConversationRowsAcrossRetry(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{sendErr: errors.New("pane unavailable")}
+	seams.install(d)
+	id := feedbackSess(t, d, "FE-preview-queue", "claude")
+	const image = "/worktree/.lola/images/paste-0123456789abcdef.png"
+	comments := []protocol.FeedbackElement{
+		{Selector: "#title", HTML: "<h1>private markup</h1>", Note: "Align the heading\n" + image},
+		{Selector: "#footer", Note: "Give the footer more space"},
+	}
+	data, err := d.handleFeedback(context.Background(), protocol.FeedbackArgs{Session: id, Elements: comments})
+	if err != nil || !data.Queued {
+		t.Fatalf("queue: %+v, %v", data, err)
+	}
+
+	rows := func(delivered bool) []string {
+		t.Helper()
+		view, err := d.handleSessionTimeline(protocol.SessionTimelineArgs{Session: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var ids []string
+		for _, item := range view.Items {
+			h := item.Human
+			if h == nil || h.Origin != protocol.SSHHumanPreview {
+				continue
+			}
+			if len(ids) >= len(comments) || h.Text != comments[len(ids)].Note || h.Delivered != delivered {
+				t.Fatalf("unexpected Conversation row: %+v", h)
+			}
+			ids = append(ids, item.ID)
+		}
+		if len(ids) != len(comments) {
+			t.Fatalf("got %d rows, want %d", len(ids), len(comments))
+		}
+		return ids
+	}
+	queued := rows(false)
+	seams.sendErr = nil
+	d.sessions.Update(id, func(cur *session.Session) bool { cur.AtPrompt = true; return true })
+	if !d.deliverFeedback(context.Background(), id) {
+		t.Fatal("retry failed")
+	}
+	sent := rows(true)
+	calls := seams.sendCalls()
+	if len(calls) == 0 || !strings.Contains(calls[len(calls)-1].text, image) {
+		t.Fatal("retried agent message lost the preview image")
+	}
+	for i := range sent {
+		if sent[i] != queued[i] {
+			t.Fatal("delivery replaced the row")
+		}
+	}
+}
+
+func TestPreviewCommentAddedDuringDeliveryStaysQueued(t *testing.T) {
+	d := newTestDaemon(t, conflictConfig(), &linear.Fake{}, &fakeNative{})
+	seams := &fakeReactSeams{}
+	seams.install(d)
+	id := feedbackSess(t, d, "FE-during", "claude")
+	send := func(note string) (protocol.FeedbackData, error) {
+		return d.handleFeedback(context.Background(), protocol.FeedbackArgs{Session: id, Elements: []protocol.FeedbackElement{{Selector: "h1", Note: note}}})
+	}
+	d.sendKeys = func(context.Context, string, string) error {
+		if data, err := send("second"); err != nil || !data.Queued {
+			t.Fatalf("concurrent append: %+v, %v", data, err)
+		}
+		return nil
+	}
+	if data, err := send("first"); err != nil || !data.Delivered {
+		t.Fatalf("send: %+v, %v", data, err)
+	}
+	cur, _ := d.sessions.Get(id)
+	if strings.Contains(cur.PendingFeedback, "first") || !strings.Contains(cur.PendingFeedback, "second") || len(cur.PendingFeedbackItems) != 1 {
+		t.Fatalf("remaining queue: %q, %v", cur.PendingFeedback, cur.PendingFeedbackItems)
+	}
+	view, err := d.handleSessionTimeline(protocol.SessionTimelineArgs{Session: id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Items) != 2 {
+		t.Fatalf("want two receipts, got %d", len(view.Items))
+	}
+	for _, item := range view.Items {
+		queued := item.ID == cur.PendingFeedbackItems[0]
+		if item.Human == nil || item.Human.Delivered == queued || (item.Human.Text == "second") != queued {
+			t.Fatalf("wrong delivery state for %s: %+v", item.ID, item.Human)
+		}
+	}
+}

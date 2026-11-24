@@ -95,10 +95,21 @@ func answerLabel(s session.Session) string {
 // the text of a comment.
 func feedbackLabel(s session.Session, text string) string {
 	n := 0
+	previewOnly := len(s.PendingFeedbackItems) > 0
 	for _, line := range strings.Split(text, "\n") {
-		if strings.HasPrefix(line, "- ") && !strings.HasPrefix(line, "- General note:") {
+		if !strings.HasPrefix(line, "- ") {
+			continue
+		}
+		if len(s.PendingFeedbackItems) > 0 && (line == "- Page element" || strings.HasPrefix(line, "- Page element on ")) {
+			continue
+		}
+		previewOnly = false
+		if !strings.HasPrefix(line, "- General note:") {
 			n++
 		}
+	}
+	if previewOnly {
+		return ""
 	}
 	who := agentWord(s)
 	switch n {
