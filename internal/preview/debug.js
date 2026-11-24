@@ -87,28 +87,39 @@ function lolaPreviewDebugger(changed = () => {}) {
   // Keep identities weak and retain actual elements only for the visible rows.
   const ids = new WeakMap(), visible = new Map();
   let nextId = 0, branches = new WeakMap(), treeVersion = 1;
-  const pageSize = 24;
+  const pageSize = 24, maxRows = 400;
+  // Narrow the tree to a branch when its expanded rows no longer fit in the
+  // snapshot. Every sibling on the current page keeps a row of its own.
+  const scope = [];
+  let initialChildren = 48, pendingReveal;
   const parentOf = el => el.parentElement || el.getRootNode().host;
-  const childCount = el => el.childElementCount + (el.shadowRoot?.childElementCount || 0);
-  function childAt(el, i) {
-    const shadow = el.shadowRoot?.children;
-    return shadow && i < shadow.length ? shadow[i] : el.children[i - (shadow?.length || 0)];
+  // Preview tools mount their overlays directly under <html>. Keep ordinary
+  // branches on the live HTMLCollection so large lists stay paginated.
+  const overlay = node => node === box || node.matches?.("[data-lola-preview], [data-lola-prepare]");
+  function childrenOf(el) {
+    return el === document.documentElement ? Array.from(el.children).filter(child => !overlay(child)) : el.children;
   }
   function reveal(el) {
+    initialChildren = 0;
+    pendingReveal = el;
+    scope.length = 0;
     branches = new WeakMap();
     for (let child = el, parent = parentOf(child); parent; child = parent, parent = parentOf(child)) {
       let index = 0;
-      for (let prev = child.previousElementSibling; prev; prev = prev.previousElementSibling) index++;
+      for (let prev = child.previousElementSibling; prev; prev = prev.previousElementSibling) {
+        if (parent !== document.documentElement || !overlay(prev)) index++;
+      }
       if (child.parentElement === parent) index += parent.shadowRoot?.childElementCount || 0;
       branches.set(parent, index - index % pageSize);
     }
     treeVersion++;
   }
   if (document.documentElement) branches.set(document.documentElement, 0);
+  let openBody = true;
   let observingTree = false;
   const observer = new MutationObserver(records => {
-    const updates = records.filter(r => r.target !== box && (r.type !== "childList" ||
-      [...r.addedNodes, ...r.removedNodes].some(n => n !== box)));
+    const updates = records.filter(r => r.target !== document.documentElement || r.type !== "childList" ||
+      [...r.addedNodes, ...r.removedNodes].some(n => !overlay(n)));
     if (!updates.length) return;
     treeVersion++;
     revision++;
@@ -124,44 +135,116 @@ function lolaPreviewDebugger(changed = () => {}) {
   cleanup.push(() => { observer.disconnect(); clearTimeout(styleTimer); });
   function tree() {
     observer.disconnect();
+    if (openBody && document.body) {
+      branches.set(document.body, 0);
+      openBody = false;
+    }
     const rows = [];
     visible.clear();
-    function visit(el, depth) {
-      if (!el || el === box || rows.length >= 400) return;
+    function visit(el, depth, limit, inBody) {
+      if (!el || el === box) return;
       if (!ids.has(el)) ids.set(el, ++nextId);
-      const id = ids.get(el), count = childCount(el);
+      const children = childrenOf(el), shadow = el.shadowRoot?.children, shadowCount = shadow?.length || 0;
+      const id = ids.get(el), count = children.length + shadowCount;
       visible.set(id, el);
-      const expanded = count > 0 && branches.has(el);
+      inBody ||= el === document.body;
+      // Show the application's first layout branches, including mounts filled
+      // after the first read. A human expansion or collapse ends the defaults.
+      if (inBody && initialChildren > 0 && count && depth <= 7 && !branches.has(el) &&
+          el.namespaceURI === "http://www.w3.org/1999/xhtml") {
+        branches.set(el, 0);
+        initialChildren -= Math.min(count, pageSize);
+      }
+      const start = Math.min(branches.get(el) || 0, Math.max(0, Math.floor((count - 1) / pageSize) * pageSize));
+      const end = Math.min(count, start + pageSize);
+      const childRows = end - start + Number(start > 0) + Number(end < count);
+      const limited = rows.length + 1 + childRows > limit;
+      const expanded = count > 0 && branches.has(el) && !limited;
       const attrs = [];
       for (const key of ["id", "class", "name", "type", "role", "href", "src"]) {
         if (el.hasAttribute(key)) attrs.push([key, clip(el.getAttribute(key), 2048)]);
         if (attrs.length >= 2) break;
       }
-      const text = !count && !["script", "style"].includes(el.localName) && el.firstChild?.nodeType === 3
-        ? clip(el.firstChild.data, 80).replace(/\r\n|[\r\n]/g, " ") : "";
-      rows.push({ id, depth, name: el.localName, attrs, text, count, expanded, selected: el === selected });
+      let text = "";
+      if (!count && el.firstChild?.nodeType === 3) {
+        text = ["script", "style"].includes(el.localName) && el.firstChild.length
+          ? "…" : clip(el.firstChild.data, 80).replace(/\r\n|[\r\n]/g, " ");
+      }
+      rows.push({ id, depth, name: el.localName, attrs, text, count, expanded, limited, foreign: el.namespaceURI !== "http://www.w3.org/1999/xhtml", selected: el === selected });
       observer.observe(el, { childList: true, attributes: true });
       if (!count && el.firstChild?.nodeType === 3) observer.observe(el.firstChild, { characterData: true });
-      if (expanded && el.shadowRoot) observer.observe(el.shadowRoot, { childList: true });
+      if (el.shadowRoot) observer.observe(el.shadowRoot, { childList: true });
       if (!expanded) return;
-      const start = Math.min(branches.get(el), Math.floor((count - 1) / pageSize) * pageSize);
-      const end = Math.min(count, start + pageSize);
       function page(offset, label) { rows.push({ id, depth: depth + 1, offset, name: label }); }
       if (start) page(start - pageSize, "Previous " + Math.min(start, pageSize) + " elements");
-      for (let i = start; i < end && rows.length < 400; i++) visit(childAt(el, i), depth + 1);
+      for (let i = start; i < end; i++) {
+        const remaining = end - i - 1 + Number(end < count);
+        visit(i < shadowCount ? shadow[i] : children[i - shadowCount], depth + 1, limit - remaining, inBody);
+      }
       if (end < count) page(end, "Next " + Math.min(count - end, pageSize) + " elements");
     }
-    visit(document.documentElement, 0);
+    while (scope.length && !scope.at(-1).isConnected) scope.pop();
+    visit(scope.at(-1) || document.documentElement, 0, maxRows, false);
+    if (pendingReveal?.isConnected && !visible.has(ids.get(pendingReveal))) {
+      // A very deep pick can exceed even a tree containing only its ancestors.
+      // Start at its immediate parent, whose page reveal() already positioned.
+      scope.push(parentOf(pendingReveal));
+      pendingReveal = null;
+      return tree();
+    }
+    pendingReveal = null;
     return rows;
   }
   function select(el) {
     if (el && el.isConnected && el !== selected) { selected = el; treeVersion++; revision++; }
   }
-  function declarations(style) {
-    return Array.from(style || [], key => [key, clip(style.getPropertyValue(key), 2048) +
-      (style.getPropertyPriority(key) ? " !important" : "")]);
+  // Disabled declarations belong to this preview document. Reopening the tools
+  // or selecting a different element must still allow the original to be restored.
+  const disabledStyles = document[Symbol.for("lola.preview.disabledStyles")] ??= new WeakMap();
+  function styleEntries(style) {
+    const disabled = disabledStyles.get(style);
+    const entries = Array.from(style || [], name => {
+      disabled?.delete(name); // The page supplied a new active value.
+      return { name, value: style.getPropertyValue(name), priority: style.getPropertyPriority(name) };
+    });
+    if (disabled) {
+      for (const entry of [...disabled.values()].sort((a, b) => a.index - b.index)) {
+        entries.splice(entry.index, 0, entry);
+      }
+    }
+    return entries;
   }
-  function matchingRules(el) {
+  function declarations(style) {
+    return styleEntries(style).map(({name, value, priority, index}) => {
+      const row = [name, clip(value, 2048) + (priority ? " !important" : "")];
+      if (index !== undefined) row.push("disabled");
+      return row;
+    });
+  }
+  function toggleStyle(style, name, enabled) {
+    const entries = styleEntries(style);
+    const index = entries.findIndex(entry => entry.name === name);
+    if (index < 0) return "The declaration changed. Select it again.";
+    const entry = entries[index];
+    if (enabled === (entry.index === undefined)) return;
+    if (!enabled) {
+      if (!disabledStyles.has(style)) disabledStyles.set(style, new Map());
+      disabledStyles.get(style).set(name, { ...entry, index });
+      style.removeProperty(name);
+    } else {
+      // Preserve declaration order, which determines the cascade for physical
+      // and logical properties. Restore the full value and !important priority.
+      const restored = document.createElement("div").style;
+      for (const prop of entries) {
+        if (prop.index === undefined || prop === entry) restored.setProperty(prop.name, prop.value, prop.priority);
+      }
+      style.cssText = restored.cssText;
+      disabledStyles.get(style).delete(name);
+    }
+  }
+  const ruleIds = new WeakMap();
+  let nextRuleId = 0;
+  function matchingRules(el, matchedStyles) {
     const root = el.getRootNode(), rules = [], visited = new Set();
     let unreadable = 0, truncated = false;
     function sheet(s, context = "") {
@@ -191,10 +274,15 @@ function lolaPreviewDebugger(changed = () => {}) {
           const condition = rule.conditionText || rule.name;
           if (condition) group = [context, condition].filter(Boolean).join(" · ");
         }
-        if (selector && rule.style?.length) {
+        if (selector && rule.style) {
           let matches = false;
           try { matches = el.matches(selector); } catch { /* unsupported selector */ }
-          if (matches) rules.push({ selector:clip(selector), source:clip(source), context:clip(group), declarations:declarations(rule.style) });
+          if (matches) {
+            if (!ruleIds.has(rule)) ruleIds.set(rule, ++nextRuleId);
+            const id = ruleIds.get(rule);
+            matchedStyles?.set(id, rule.style);
+            rules.push({ id, selector:clip(selector), source:clip(source), context:clip(group), declarations:declarations(rule.style) });
+          }
         }
         if (rule.cssRules?.length) walk(rule.cssRules, source, group, selector);
       }
@@ -219,7 +307,7 @@ function lolaPreviewDebugger(changed = () => {}) {
   return function handle(cmd) {
     let editError;
     if (cmd.op === "cancel-pick") { pick(false); return; }
-    if (cmd.op === "style" && cmd.documentKey !== documentKey) editError = "The page changed. Select the element again.";
+    if ((cmd.op === "style" || cmd.op === "ruleStyle" || cmd.op === "toggleStyle") && cmd.documentKey !== documentKey) editError = "The page changed. Select the element again.";
     if (cmd.op !== "close" && cmd.op !== "read" && cmd.documentKey !== documentKey) cmd = { ...cmd, op: "read" };
     if (!!cmd.elements !== observingTree) {
       observingTree = !!cmd.elements;
@@ -231,9 +319,17 @@ function lolaPreviewDebugger(changed = () => {}) {
       case "close": changed = () => {}; pick(false); highlight(null); cleanup.splice(0).forEach(fn => fn()); return;
       case "pick": pick(!!cmd.on); break;
       case "select": select(visible.get(cmd.index)); break;
+      case "treeBack":
+        if (scope.length) { select(scope.pop()); treeVersion++; }
+        break;
       case "branch": {
         const el = visible.get(cmd.index);
         if (!el?.isConnected) break;
+        initialChildren = 0;
+        if (cmd.scoped && cmd.on && el !== scope.at(-1) && el !== document.documentElement) {
+          scope.push(el);
+          select(el);
+        }
         if (cmd.on) branches.set(el, Math.max(0, Number.isSafeInteger(cmd.offset) ? cmd.offset : 0));
         else branches.delete(el);
         // Keep a visible selection when hiding or paging its descendants.
@@ -241,15 +337,45 @@ function lolaPreviewDebugger(changed = () => {}) {
         treeVersion++;
         break;
       }
+      case "toggleStyle":
+      case "ruleStyle":
       case "style":
         if (cmd.index !== ids.get(selected) || !selected?.isConnected || !selected.style) {
           editError = "The selection changed. Select the element again.";
         } else if (typeof cmd.name === "string" && typeof cmd.value === "string") {
+          let style = selected.style;
+          if (cmd.op === "ruleStyle" || cmd.ruleId !== undefined) {
+            // HMR can replace a sheet with identical selectors between click and
+            // commit. Resolve the original CSSRule against the live selection.
+            const matchedStyles = new Map();
+            matchingRules(selected, matchedStyles);
+            style = matchedStyles.get(cmd.ruleId);
+            if (!style) { editError = "The matching rule changed. Select it again."; revision++; break; }
+          }
+          if (cmd.op === "toggleStyle") {
+            editError = toggleStyle(style, cmd.name, cmd.on === true);
+            revision++;
+            break;
+          }
           const name = cmd.name.trim(), important = /\s*!important\s*$/i;
           const value = cmd.value.replace(important, "").trim();
-          if (cmd.value.trim() && (!value || !CSS.supports(name, value))) editError = "Enter a valid CSS property and value.";
+          const renaming = typeof cmd.originalName === "string" && cmd.originalName !== name;
+          const entries = styleEntries(style);
+          const original = entries.find(entry => entry.name === (cmd.originalName ?? name));
+          if (renaming && !original) editError = "The original declaration changed.";
+          else if (renaming && entries.some(entry => entry.name === name)) editError = "This property already exists.";
+          else if (renaming && !value) editError = "Enter a value for the new property.";
+          else if (cmd.value.trim() && (!value || !CSS.supports(name, value))) editError = "Enter a valid CSS property and value.";
           else {
-            selected.style.setProperty(name, value, important.test(cmd.value) ? "important" : "");
+            const priority = important.test(cmd.value) ? "important" : "";
+            if (original?.index !== undefined) {
+              const disabled = disabledStyles.get(style);
+              disabled.delete(original.name);
+              if (value) disabled.set(name, { ...original, name, value, priority });
+            } else {
+              if (renaming) style.removeProperty(cmd.originalName);
+              style.setProperty(name, value, priority);
+            }
             revision++;
           }
         }
@@ -278,7 +404,7 @@ function lolaPreviewDebugger(changed = () => {}) {
     }
     if (!stylesOpen || auditDue || needsDetails || !styleTimer) scheduleAudit(stylesOpen);
     auditDue = false;
-    if (cmd.elements && (!sameDocument || cmd.treeVersion !== treeVersion)) { result.tree = tree(); result.treeVersion = treeVersion; }
+    if (cmd.elements && (!sameDocument || cmd.treeVersion !== treeVersion)) { result.tree = tree(); result.treeVersion = treeVersion; result.treeScoped = scope.length > 0; }
     return result;
   };
 }

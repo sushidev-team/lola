@@ -13,7 +13,13 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "^6.20.2",
+    "@codemirror/commands": "^6.10.3",
+    "@codemirror/lang-css": "^6.3.1",
+    "@codemirror/language": "^6.12.3",
+    "@codemirror/view": "^6.42.1",
     "@fontsource/jetbrains-mono": "^5.3.0",
+    "@lezer/highlight": "^1.2.3",
     "@lucide/svelte": "1.70.0",
     "@wailsio/runtime": "3.1.0",
     "@xterm/addon-canvas": "^0.7.0",
