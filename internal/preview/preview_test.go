@@ -39,6 +39,34 @@ func TestInject(t *testing.T) {
 	}
 }
 
+// Statamic boots an empty Inertia mount from absolute module URLs, then reads
+// its login endpoints from PHP-encoded JSON in the HTML and inline config.
+func TestPreviewRewritesPageAssetsAndLoginURLs(t *testing.T) {
+	from, _ := url.Parse("https://shop.test")
+	to, _ := url.Parse("http://p-site.localhost:4567")
+	rewrite := htmlPageRewriter(from, to)
+	for _, tc := range []struct{ before, after string }{
+		{`<link rel="modulepreload" href="https://SHOP.TEST:443/vendor/cp.js">`, `<link rel="modulepreload" href="http://p-site.localhost:4567/vendor/cp.js">`},
+		{`<script type="module" src='https://shop.test/vendor/cp.js'></script>`, `<script type="module" src='http://p-site.localhost:4567/vendor/cp.js'></script>`},
+		{`<div data-page="{&quot;submitUrl&quot;:&quot;https:\/\/shop.test\/cp\/login&quot;}">`, `<div data-page="{&quot;submitUrl&quot;:&quot;http:\/\/p-site.localhost:4567\/cp\/login&quot;}">`},
+		{`<script>var cfg={"cpUrl":"https:\/\/shop.test\/cp"}</script>`, `<script>var cfg={"cpUrl":"http:\/\/p-site.localhost:4567\/cp"}</script>`},
+	} {
+		if got := string(rewrite([]byte(tc.before))); !strings.Contains(got, tc.after) {
+			t.Errorf("rewrote %s to %s", tc.before, got)
+		}
+	}
+	for _, keep := range []string{
+		`<script src="https://shop.test:4430/vendor.js">`, `<script src="https://shop.test.other/cp.js">`,
+		`<a href="https://shop.test@other.test/">`, `<a href="http://shop.test/">`, `<link href="/local.css">`,
+		`<input value="https://shop.test/cp">`, `<p>"https://shop.test/cp"</p>`,
+		`<script>var content={"text":"https://shop.test/cp"}</script>`,
+	} {
+		if got := string(rewrite([]byte(keep))); !strings.Contains(got, keep) {
+			t.Errorf("unexpected change to %s", keep)
+		}
+	}
+}
+
 // WebKit resolves *.localhost to loopback even on hosts whose system DNS
 // does not. Dial the listener directly while preserving the browser Host.
 var previewClient = &http.Client{
@@ -279,7 +307,7 @@ func TestPreviewWebSocketOrigin(t *testing.T) {
 }
 
 func TestPreviewStreamsOversizeHTML(t *testing.T) {
-	page := strings.Repeat("x", maxHTML) + "<footer>last byte</footer>"
+	page := strings.Repeat("x", maxRewriteBody) + "<footer>last byte</footer>"
 	for _, encoding := range []string{"identity", "gzip"} {
 		t.Run(encoding, func(t *testing.T) {
 			resp := &http.Response{Header: make(http.Header), ContentLength: -1, Body: io.NopCloser(strings.NewReader(page))}
@@ -298,7 +326,7 @@ func TestPreviewStreamsOversizeHTML(t *testing.T) {
 				resp.Header.Set("Content-Encoding", "gzip")
 			}
 			origin, _ := url.Parse("http://localhost")
-			if err := rewriteResponse(resp, origin, origin); err != nil {
+			if err := rewriteResponse(resp, origin, origin, htmlPageRewriter(origin, origin)); err != nil {
 				t.Fatal(err)
 			}
 			defer resp.Body.Close()

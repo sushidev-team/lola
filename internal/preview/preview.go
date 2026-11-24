@@ -24,6 +24,7 @@ import (
 	"context"
 	"crypto/rand"
 	_ "embed"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -56,9 +57,9 @@ var xsrfJS string
 // allowed by a dev server's `script-src 'self'`, which an inline one is not.
 const ScriptPath = "/__lola_preview/picker.js"
 
-// maxHTML bounds a page held in memory to inject the script. A larger HTML
-// response streams through unmodified (the picker is then simply absent).
-const maxHTML = 8 << 20
+// maxRewriteBody bounds HTML and navigation JSON held for rewriting. Larger
+// responses stream through unmodified.
+const maxRewriteBody = 8 << 20
 
 // ErrNotLoopback is returned for a URL the preview must not proxy.
 var ErrNotLoopback = errors.New("preview: only http(s) loopback addresses can be previewed")
@@ -186,6 +187,7 @@ func (s *Server) start(origin *url.URL) (*proxy, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	p := &proxy{addr: addr, cancel: cancel}
 	self := &url.URL{Scheme: "http", Host: addr}
+	rewritePage := htmlPageRewriter(origin, self)
 	rp := &httputil.ReverseProxy{
 		Transport: upstreamTransport,
 		Rewrite: func(r *httputil.ProxyRequest) {
@@ -205,7 +207,7 @@ func (s *Server) start(origin *url.URL) (*proxy, error) {
 			}
 			stripPreviewCookie(r.Out)
 		},
-		ModifyResponse: func(resp *http.Response) error { return rewriteResponse(resp, origin, self) },
+		ModifyResponse: func(resp *http.Response) error { return rewriteResponse(resp, origin, self, rewritePage) },
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			http.Error(w, "The dev server at "+origin.Host+" is not answering.", http.StatusBadGateway)
 		},
@@ -303,7 +305,36 @@ func rewriteOrigin(h http.Header, key string, from, to *url.URL) {
 	}
 }
 
-func rewriteResponse(resp *http.Response, origin, self *url.URL) error {
+// htmlPageRewriter maps quoted absolute URLs on the upstream origin to the
+// browser's origin before its HTML preload scanner sees them. Apps that ignore
+// forwarded headers can emit these in module tags, embedded JSON (including
+// PHP's escaped slashes), or HTML-escaped page props used for form actions.
+func htmlPageRewriter(origin, self *url.URL) func([]byte) []byte {
+	const quote = `(?:["']|&quot;|&apos;|&#34;|&#39;)`
+	// Limit substitution to markup addresses and URL-valued bootstrap props.
+	// Text and ordinary field values may themselves contain a site's address.
+	const attr = `[[:space:]](?:src|href|action|formaction|poster)\s*=\s*["']`
+	const prop = quote + `(?:[\w$-]*url|href|action)` + quote + `\s*:\s*` + quote
+	host := regexp.QuoteMeta(origin.Host)
+	if origin.Port() == "" {
+		if origin.Scheme == "https" {
+			host += `(?::443)?`
+		} else {
+			host += `(?::80)?`
+		}
+	}
+	// Match the entire authority, including the port. Preserve the document's
+	// quoting and slash escapes, and leave relative and foreign URLs alone.
+	address := regexp.MustCompile(`(?i)(` + attr + `|` + prop + `)` + origin.Scheme + `:(//|\\/\\/)` + host + `([/?#]|\\/|` + quote + `)`)
+	replacement := []byte("${1}" + self.Scheme + ":${2}" + self.Host + "${3}")
+	return func(body []byte) []byte {
+		return Inject(rewriteStatamicMount(body, origin, self, func(markup []byte) []byte {
+			return address.ReplaceAll(markup, replacement)
+		}))
+	}
+}
+
+func rewriteResponse(resp *http.Response, origin, self *url.URL, rewriteBody func([]byte) []byte) error {
 	h := resp.Header
 	h.Del("X-Frame-Options")
 	for _, key := range []string{"Content-Security-Policy", "Content-Security-Policy-Report-Only"} {
@@ -321,12 +352,31 @@ func rewriteResponse(resp *http.Response, origin, self *url.URL) error {
 	rewriteOrigin(h, "Location", origin, self)
 	rewriteOrigin(h, "X-Inertia-Location", origin, self)
 	frameCookies(h, origin.Hostname(), self.Hostname())
-	if !strings.HasPrefix(strings.ToLower(h.Get("Content-Type")), "text/html") ||
-		resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified ||
-		h.Get("Content-Encoding") != "" && !strings.EqualFold(h.Get("Content-Encoding"), "gzip") {
+	if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusNotModified ||
+		resp.StatusCode == http.StatusPartialContent || resp.Request != nil && resp.Request.Method == http.MethodHead ||
+		h.Get("Content-Encoding") != "" && !strings.EqualFold(h.Get("Content-Encoding"), "gzip") ||
+		resp.ContentLength > maxRewriteBody {
 		return nil
 	}
-	if resp.ContentLength > maxHTML {
+	mediaType, _, _ := strings.Cut(strings.ToLower(h.Get("Content-Type")), ";")
+	switch strings.TrimSpace(mediaType) {
+	case "text/html":
+	case "application/json":
+		inertia := strings.EqualFold(h.Get("X-Inertia"), "true")
+		if !inertia && (resp.Request == nil || resp.Request.Method != http.MethodGet || !collectionListingPath.MatchString(resp.Request.URL.Path)) {
+			return nil
+		}
+		rewriteBody = func(body []byte) []byte {
+			if inertia {
+				if statamicPage(body) {
+					return rewriteNavigationJSON(body, origin, self, inertiaPage)
+				}
+			} else if json.Valid(body) {
+				return rewriteNavigationJSON(body, origin, self, collectionListing)
+			}
+			return body
+		}
+	default:
 		return nil
 	}
 	var rd io.Reader = resp.Body
@@ -337,12 +387,12 @@ func rewriteResponse(resp *http.Response, origin, self *url.URL) error {
 		}
 		rd = zr
 	}
-	body, err := io.ReadAll(io.LimitReader(rd, maxHTML+1))
+	body, err := io.ReadAll(io.LimitReader(rd, maxRewriteBody+1))
 	if err != nil {
 		_ = resp.Body.Close()
 		return err
 	}
-	if len(body) > maxHTML {
+	if len(body) > maxRewriteBody {
 		// The length was unknown, or the page expanded beyond the limit.
 		// Replay the decoded prefix and stream the rest from the same reader.
 		resp.Body = struct {
@@ -355,7 +405,7 @@ func rewriteResponse(resp *http.Response, origin, self *url.URL) error {
 		return nil
 	}
 	_ = resp.Body.Close()
-	body = Inject(body)
+	body = rewriteBody(body)
 	h.Del("Content-Encoding")
 	h.Set("Content-Length", strconv.Itoa(len(body)))
 	resp.ContentLength = int64(len(body))

@@ -29,7 +29,8 @@ export function AutoTestLogin(session: string, url: string, project: string, nam
 /**
  * Open returns the address the pane frames for one of the session's dev URLs.
  * Both macOS bundle plists must allow the proxy's *.localhost address.
- * Proxy-aware apps also use that address to generate links and login URLs.
+ * The proxy keeps module URLs and login endpoints on the frame's origin even
+ * when the app generates them from its upstream Host.
  */
 export function Open(session: string, url: string): $CancellablePromise<string> {
     return $Call.ByID(2710759037, session, url);
